@@ -21,6 +21,7 @@ export class CameraRig {
     this.dom = domElement;
     this.mode = 'orbit';
     this.target = null; // THREE.Object3D for follow/fps/orbit
+    this.enabled = true; // editor sets false while a gizmo drag is active
 
     // orbit / follow state
     this.theta = Math.PI * 0.25;
@@ -36,7 +37,7 @@ export class CameraRig {
     this._last = { x: 0, y: 0 };
 
     domElement.addEventListener('mousedown', (e) => {
-      if (this.mode === 'orbit' && e.button === 0) {
+      if (this.mode === 'orbit' && e.button === 0 && this.enabled !== false) {
         this._dragging = true;
         this._last.x = e.clientX;
         this._last.y = e.clientY;
@@ -68,6 +69,7 @@ export class CameraRig {
   }
 
   update(dt, input) {
+    if (this.enabled === false) return;
     switch (this.mode) {
       case 'orbit': this._orbit(dt, input); break;
       case 'follow': this._follow(dt, input); break;

@@ -1,34 +1,62 @@
 import * as THREE from 'three';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+
+const DEG = 180 / Math.PI;
+const RAD = Math.PI / 180;
 
 /**
- * ObjectEditor — click to select any registered object, then move it on the
- * ground plane by dragging, rotate with R (Shift = reverse), scale with [ ],
- * delete with Delete/Backspace.
+ * ObjectEditor — scene editing with a real transform gizmo.
  *
- *   const editor = new ObjectEditor(engine, infoElement);
- *   editor.register(entity);            // entity: { object3D, ... }
- *   editor.update(dt);                  // call every frame
- *   editor.selected                     // currently selected entity or null
+ * Features:
+ *   - click an object in the viewport (or hierarchy) to select it
+ *   - translate / rotate / scale gizmo (TransformControls), modes G / R / S
+ *   - numeric inspector: name, position, rotation (deg), scale — all editable
+ *   - hierarchy panel listing every registered object; click to select
+ *   - delete with Del or the inspector button
+ *
+ *   const editor = new ObjectEditor(engine, {
+ *     listEl, inspectorEl, statusEl,
+ *     onModeChange(mode) {},        // update toolbar button states
+ *   });
+ *   editor.register(entity);        // entity: { object3D, ... }
+ *   editor.update(dt);              // call every frame
+ *   editor.setGizmoMode('rotate');  // 'translate' | 'rotate' | 'scale'
  */
 export class ObjectEditor {
-  constructor(engine, infoEl = null) {
+  constructor(engine, { listEl = null, inspectorEl = null, statusEl = null, onModeChange = null } = {}) {
     this.engine = engine;
-    this.infoEl = infoEl;
+    this.listEl = listEl;
+    this.inspectorEl = inspectorEl;
+    this.statusEl = statusEl;
+    this.onModeChange = onModeChange;
+
     this.selectables = [];
     this.selected = null;
     this._raycaster = new THREE.Raycaster();
-    this._dragging = false;
-    this._dragOffset = new THREE.Vector3();
-    this._dragPoint = new THREE.Vector3();
-    this._dragY = 0;
+    this._gizmoMode = 'translate';
 
+    // --- transform gizmo ---
+    this.gizmo = new TransformControls(engine.camera, engine.renderer.domElement);
+    engine.scene.add(this.gizmo);
+    this.gizmo.addEventListener('objectChange', () => this._syncInspector());
+    // don't let the orbit camera fight the gizmo while dragging its handles
+    this.gizmo.addEventListener('dragging-changed', (e) => {
+      if (engine.cameraRig) engine.cameraRig.enabled = !e.value;
+    });
+
+    // --- selection highlight ---
     this._helper = new THREE.BoxHelper(new THREE.Object3D(), 0x4dd0a6);
     this._helper.visible = false;
     engine.scene.add(this._helper);
   }
 
+  // ---------- registry ----------
+
   register(entity) {
-    if (!this.selectables.includes(entity)) this.selectables.push(entity);
+    if (!this.selectables.includes(entity)) {
+      this.selectables.push(entity);
+      this._renderHierarchy();
+    }
     return entity;
   }
 
@@ -36,20 +64,41 @@ export class ObjectEditor {
     const i = this.selectables.indexOf(entity);
     if (i !== -1) this.selectables.splice(i, 1);
     if (this.selected === entity) this.select(null);
+    this._renderHierarchy();
   }
+
+  // ---------- selection ----------
 
   select(entity) {
     this.selected = entity;
-    this._helper.visible = entity != null;
-    if (entity) this._helper.setFromObject(entity.object3D);
-    this._renderInfo();
+    if (entity) {
+      this.gizmo.attach(entity.object3D);
+      this._helper.visible = true;
+      this._helper.setFromObject(entity.object3D);
+    } else {
+      this.gizmo.detach();
+      this._helper.visible = false;
+    }
+    this._renderHierarchy();
+    this._renderInspector();
   }
+
+  setGizmoMode(mode) {
+    if (!['translate', 'rotate', 'scale'].includes(mode)) return;
+    this._gizmoMode = mode;
+    this.gizmo.setMode(mode);
+    if (typeof this.onModeChange === 'function') this.onModeChange(mode);
+  }
+
+  get gizmoMode() { return this._gizmoMode; }
+
+  // ---------- per-frame ----------
 
   update(_dt) {
     const { input, camera } = this.engine;
 
-    // --- selection ---
-    if (input.mouseClicked(0)) {
+    // click to select (only when the gizmo isn't being dragged)
+    if (input.mouseClicked(0) && !this.gizmo.dragging) {
       this._raycaster.setFromCamera(input.mouseNDC, camera);
       const roots = this.selectables.map((e) => e.object3D);
       const hit = this._raycaster.intersectObjects(roots, true)[0];
@@ -59,68 +108,169 @@ export class ObjectEditor {
           while (node) { if (node === e.object3D) return true; node = node.parent; }
           return false;
         });
-        if (entity) {
-          this.select(entity);
-          // begin ground-plane drag
-          const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-          if (this._raycaster.ray.intersectPlane(plane, this._dragPoint)) {
-            this._dragging = true;
-            this._dragY = entity.object3D.position.y;
-            this._dragOffset.copy(entity.object3D.position).sub(this._dragPoint);
-          }
-        }
-      } else if (this.selected && !this._dragging) {
+        if (entity && entity !== this.selected) this.select(entity);
+      } else if (this.selected) {
         this.select(null);
       }
     }
 
-    // --- drag on ground plane ---
-    if (this._dragging && input.mouseDown(0) && this.selected) {
-      this._raycaster.setFromCamera(input.mouseNDC, camera);
-      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-      if (this._raycaster.ray.intersectPlane(plane, this._dragPoint)) {
-        this.selected.object3D.position.set(
-          this._dragPoint.x + this._dragOffset.x,
-          this._dragY,
-          this._dragPoint.z + this._dragOffset.z
-        );
-      }
+    // gizmo mode hotkeys — but not while typing in an inspector field
+    if (!this._typingInInspector()) {
+      if (input.wasPressed('KeyG')) this.setGizmoMode('translate');
+      if (input.wasPressed('KeyR')) this.setGizmoMode('rotate');
+      if (input.wasPressed('KeyS')) this.setGizmoMode('scale');
     }
-    if (!input.mouseDown(0)) this._dragging = false;
 
-    // --- transform hotkeys ---
+    // delete selection
     const sel = this.selected;
+    if (sel && (input.wasPressed('Delete') || input.wasPressed('Backspace')) && !this._typingInInspector()) {
+      this.deleteSelected();
+      return;
+    }
+
     if (sel) {
-      const obj = sel.object3D;
-      if (input.wasPressed('KeyR')) {
-        obj.rotation.y += input.isDown('ShiftLeft') ? -Math.PI / 12 : Math.PI / 12;
-      }
-      if (input.wasPressed('BracketLeft')) obj.scale.multiplyScalar(0.9);
-      if (input.wasPressed('BracketRight')) obj.scale.multiplyScalar(1.1);
-      if (input.wasPressed('Delete') || input.wasPressed('Backspace')) {
-        const entity = sel;
-        this.select(null);
-        if (typeof entity.destroy === 'function') entity.destroy(this.engine);
-        else this.engine.remove(entity);
-        this.unregister(entity);
-      }
-      this._helper.setFromObject(obj);
-      this._renderInfo();
+      this._helper.setFromObject(sel.object3D);
+      // keep inspector numbers live while dragging the gizmo
+      if (this.gizmo.dragging) this._syncInspector();
+    }
+
+    this._renderStatus();
+  }
+
+  deleteSelected() {
+    const entity = this.selected;
+    if (!entity) return;
+    this.select(null);
+    if (typeof entity.destroy === 'function') entity.destroy(this.engine);
+    else this.engine.remove(entity);
+    this.unregister(entity);
+  }
+
+  // ---------- hierarchy panel ----------
+
+  _renderHierarchy() {
+    if (!this.listEl) return;
+    this.listEl.innerHTML = '';
+    for (const entity of this.selectables) {
+      const li = document.createElement('li');
+      if (entity === this.selected) li.classList.add('selected');
+      const kind = entity.object3D.userData.kind || entity.constructor.name;
+      li.innerHTML = `<span class="ico">${this._icon(kind)}</span><span class="nm">${this._name(entity)}</span>`;
+      li.addEventListener('click', () => this.select(entity));
+      this.listEl.appendChild(li);
     }
   }
 
-  _renderInfo() {
-    if (!this.infoEl) return;
+  _icon(kind) {
+    switch (kind) {
+      case 'Player': return '●';
+      case 'Coin': return '◉';
+      case 'Prop': return '■';
+      default: return '◆';
+    }
+  }
+
+  _name(entity) {
+    return entity.object3D.name || entity.constructor.name;
+  }
+
+  // ---------- inspector panel ----------
+
+  _renderInspector() {
+    if (!this.inspectorEl) return;
     const sel = this.selected;
     if (!sel) {
-      this.infoEl.innerHTML = '<span class="dim">(nothing selected)</span>';
+      this.inspectorEl.innerHTML = '<div class="empty">Select an object in the scene or hierarchy.</div>';
       return;
     }
-    const p = sel.object3D.position;
-    const s = sel.object3D.scale;
-    this.infoEl.innerHTML =
-      `<b>${sel.object3D.name || sel.constructor.name}</b><br />` +
-      `pos&nbsp; ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}<br />` +
-      `scale ${s.x.toFixed(2)}`;
+
+    const o = sel.object3D;
+    this.inspectorEl.innerHTML = `
+      <div class="body">
+        <input class="obj-name" id="insp-name" value="${this._name(sel)}" spellcheck="false" />
+        ${this._vecRow('pos', 'Position', o.position)}
+        ${this._vecRow('rot', 'Rotation°', { x: o.rotation.x * DEG, y: o.rotation.y * DEG, z: o.rotation.z * DEG })}
+        ${this._vecRow('scl', 'Scale', o.scale)}
+        <div class="insp-row">
+          <button class="tbtn" id="insp-dup">Duplicate</button>
+          <button class="tbtn danger" id="insp-del">Delete</button>
+        </div>
+      </div>`;
+
+    // name
+    this.inspectorEl.querySelector('#insp-name').addEventListener('input', (e) => {
+      o.name = e.target.value;
+      this._renderHierarchy();
+    });
+
+    // numeric vectors
+    for (const [key, target, conv] of [
+      ['pos', o.position, 1],
+      ['rot', o.rotation, RAD],
+      ['scl', o.scale, 1],
+    ]) {
+      for (const axis of ['x', 'y', 'z']) {
+        const field = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
+        field.addEventListener('input', () => {
+          const v = parseFloat(field.value);
+          if (Number.isFinite(v)) {
+            target[axis] = v * conv;
+            this._helper.setFromObject(o);
+            this.gizmo.updateMatrixWorld?.();
+          }
+        });
+      }
+    }
+
+    this.inspectorEl.querySelector('#insp-del').addEventListener('click', () => this.deleteSelected());
+    this.inspectorEl.querySelector('#insp-dup').addEventListener('click', () => {
+      const clone = o.clone(true);
+      clone.position.x += 1.5;
+      clone.name = (o.name || 'Object') + ' copy';
+      const entity = { object3D: clone };
+      this.engine.add(entity);
+      this.register(entity);
+      this.select(entity);
+    });
+  }
+
+  _vecRow(key, label, v) {
+    const f = (n) => (Math.round(n * 100) / 100).toString();
+    return `
+      <div class="vec-row">
+        <label>${label}</label>
+        <input id="insp-${key}-x" type="number" step="0.1" value="${f(v.x)}" />
+        <input id="insp-${key}-y" type="number" step="0.1" value="${f(v.y)}" />
+        <input id="insp-${key}-z" type="number" step="0.1" value="${f(v.z)}" />
+      </div>`;
+  }
+
+  /** Refresh inspector numbers without rebuilding the DOM (used while dragging). */
+  _syncInspector() {
+    const sel = this.selected;
+    if (!sel || !this.inspectorEl || this._typingInInspector()) return;
+    const o = sel.object3D;
+    const set = (key, axis, val) => {
+      const el = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
+      if (el) el.value = (Math.round(val * 100) / 100).toString();
+    };
+    for (const a of ['x', 'y', 'z']) {
+      set('pos', a, o.position[a]);
+      set('rot', a, o.rotation[a] * DEG);
+      set('scl', a, o.scale[a]);
+    }
+  }
+
+  _typingInInspector() {
+    const a = document.activeElement;
+    return a && this.inspectorEl && this.inspectorEl.contains(a) &&
+      (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA');
+  }
+
+  _renderStatus() {
+    if (!this.statusEl) return;
+    const cam = this.engine.cameraRig ? this.engine.cameraRig.mode : 'orbit';
+    const sel = this.selected ? ` · selected: <b>${this._name(this.selected)}</b>` : '';
+    this.statusEl.innerHTML = `${cam} cam · ${this._gizmoMode} gizmo${sel}`;
   }
 }

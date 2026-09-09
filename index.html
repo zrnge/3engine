@@ -3,44 +3,150 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tiny3 Engine — Sandbox</title>
+  <title>Tiny3 Engine — Editor</title>
   <style>
-    html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0e14; }
+    :root {
+      --bg: #0b0e14;
+      --panel: rgba(13, 17, 23, 0.92);
+      --border: #30363d;
+      --text: #e6edf3;
+      --dim: #8b949e;
+      --accent: #4dd0a6;
+      --accent-dim: #21262d;
+    }
+    html, body { margin: 0; padding: 0; overflow: hidden; background: var(--bg); }
     canvas { display: block; }
+    * { box-sizing: border-box; }
+
     .panel {
       position: fixed;
-      color: #e6edf3; font-family: system-ui, sans-serif; font-size: 13px;
-      background: rgba(13, 17, 23, 0.78); padding: 10px 14px; border-radius: 8px;
-      user-select: none; line-height: 1.55;
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      user-select: none;
     }
-    #hud  { top: 12px; left: 12px; pointer-events: none; max-width: 340px; }
-    #info { top: 12px; right: 12px; pointer-events: none; min-width: 190px; }
-    .panel b { color: #4dd0a6; }
-    .panel .k {
-      display: inline-block; background: #21262d; border: 1px solid #30363d;
-      border-radius: 4px; padding: 0 5px; font-size: 12px; color: #e6edf3;
+    .panel h3 {
+      margin: 0; padding: 8px 12px 6px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--dim);
+      border-bottom: 1px solid var(--border);
     }
-    #info .dim { color: #8b949e; }
+
+    /* ---- top toolbar ---- */
+    #toolbar {
+      top: 10px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 4px; align-items: center;
+      padding: 6px 8px; z-index: 10;
+    }
+    #toolbar .sep { width: 1px; height: 22px; background: var(--border); margin: 0 6px; }
+    .tbtn {
+      appearance: none; border: 1px solid transparent; background: transparent;
+      color: var(--text); font: inherit; padding: 5px 10px; border-radius: 6px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .tbtn:hover { background: var(--accent-dim); }
+    .tbtn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+    .tbtn .k { color: var(--dim); font-size: 11px; margin-left: 4px; }
+
+    /* ---- hierarchy (left) ---- */
+    #hierarchy { top: 64px; left: 10px; width: 210px; max-height: 55vh; overflow-y: auto; padding-bottom: 6px; z-index: 10; }
+    #hierarchy .add-row { display: flex; gap: 4px; padding: 8px 10px 4px; flex-wrap: wrap; }
+    #hierarchy .add-row .tbtn { border: 1px solid var(--border); padding: 3px 8px; font-size: 12px; }
+    #scene-list { list-style: none; margin: 4px 0 0; padding: 0; }
+    #scene-list li {
+      padding: 5px 12px; cursor: pointer; display: flex; align-items: center; gap: 7px;
+      border-left: 3px solid transparent; color: var(--text);
+    }
+    #scene-list li:hover { background: var(--accent-dim); }
+    #scene-list li.selected { background: var(--accent-dim); border-left-color: var(--accent); }
+    #scene-list li .ico { color: var(--dim); font-size: 11px; width: 14px; text-align: center; }
+    #scene-list li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ---- inspector (right) ---- */
+    #inspector { top: 64px; right: 10px; width: 250px; padding-bottom: 10px; max-height: 80vh; overflow-y: auto; z-index: 10; }
+    #inspector .body { padding: 8px 12px; }
+    #inspector .obj-name {
+      width: 100%; margin-bottom: 10px;
+      background: var(--accent-dim); border: 1px solid var(--border); border-radius: 5px;
+      color: var(--text); font: inherit; padding: 4px 8px;
+    }
+    .vec-row { display: grid; grid-template-columns: 52px 1fr 1fr 1fr; gap: 4px; align-items: center; margin-bottom: 5px; }
+    .vec-row label { color: var(--dim); font-size: 12px; }
+    .vec-row input {
+      width: 100%; background: #0d1117; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text); font: inherit; font-size: 12px; padding: 3px 5px;
+    }
+    .vec-row input:focus { outline: none; border-color: var(--accent); }
+    .insp-row { display: flex; gap: 6px; margin-top: 10px; }
+    .insp-row .tbtn { flex: 1; border: 1px solid var(--border); text-align: center; font-size: 12px; }
+    .insp-row .tbtn.danger:hover { border-color: #f85149; color: #f85149; }
+    #inspector .empty { padding: 14px 12px; color: var(--dim); }
+
+    /* ---- status bar (bottom-left) ---- */
+    #status {
+      bottom: 10px; left: 10px; padding: 6px 12px; color: var(--dim); font-size: 12px; z-index: 10;
+    }
+    #status b { color: var(--accent); font-weight: 600; }
+    #status .k {
+      display: inline-block; background: var(--accent-dim); border: 1px solid var(--border);
+      border-radius: 4px; padding: 0 5px; font-size: 11px; color: var(--text);
+    }
   </style>
   <script type="importmap">
     {
       "imports": {
         "three": "./lib/three.module.js",
         "three/addons/loaders/GLTFLoader.js": "./lib/GLTFLoader.js",
+        "three/addons/controls/TransformControls.js": "./lib/TransformControls.js",
         "../utils/BufferGeometryUtils.js": "./lib/utils/BufferGeometryUtils.js"
       }
     }
   </script>
 </head>
 <body>
-  <div id="hud" class="panel">
-    <b>Tiny3 Engine</b> — sandbox<br />
-    Camera: <span class="k">1</span> orbit <span class="k">2</span> follow <span class="k">3</span> FPS <span class="k">4</span> free<br />
-    Move: <span class="k">WASD</span> &nbsp; Jump: <span class="k">Space</span> &nbsp; Pause: <span class="k">P</span><br />
-    Editor: <span class="k">click</span> select &nbsp; <span class="k">R</span> rotate &nbsp; <span class="k">[ ]</span> scale<br />
-    <span class="k">L</span> load GLB &nbsp; <span class="k">Del</span> remove &nbsp; <span class="k">Esc</span> deselect / release mouse
+  <!-- top toolbar: gizmo modes + camera modes -->
+  <div id="toolbar" class="panel">
+    <button class="tbtn gizmo-btn active" data-mode="translate" title="Move gizmo (G)">↖ Move <span class="k">G</span></button>
+    <button class="tbtn gizmo-btn" data-mode="rotate" title="Rotate gizmo (R)">⟳ Rotate <span class="k">R</span></button>
+    <button class="tbtn gizmo-btn" data-mode="scale" title="Scale gizmo (S)">⤢ Scale <span class="k">S</span></button>
+    <div class="sep"></div>
+    <button class="tbtn cam-btn active" data-mode="orbit" title="Orbit camera (1)">Orbit <span class="k">1</span></button>
+    <button class="tbtn cam-btn" data-mode="follow" title="Follow camera (2)">Follow <span class="k">2</span></button>
+    <button class="tbtn cam-btn" data-mode="free" title="Fly camera (4)">Fly <span class="k">4</span></button>
+    <div class="sep"></div>
+    <button class="tbtn" id="btn-load-glb" title="Load a .glb model from disk (L)">＋ GLB <span class="k">L</span></button>
   </div>
-  <div id="info" class="panel"><span class="dim">(nothing selected)</span></div>
+
+  <!-- scene hierarchy -->
+  <div id="hierarchy" class="panel">
+    <h3>Hierarchy</h3>
+    <div class="add-row">
+      <button class="tbtn" data-add="box">Box</button>
+      <button class="tbtn" data-add="sphere">Sphere</button>
+      <button class="tbtn" data-add="cone">Cone</button>
+      <button class="tbtn" data-add="cylinder">Cyl</button>
+      <button class="tbtn" data-add="torus">Torus</button>
+    </div>
+    <ul id="scene-list"></ul>
+  </div>
+
+  <!-- inspector -->
+  <div id="inspector" class="panel">
+    <h3>Inspector</h3>
+    <div id="inspector-body"><div class="empty">Select an object in the scene or hierarchy.</div></div>
+  </div>
+
+  <!-- status bar -->
+  <div id="status" class="panel">
+    <b>Tiny3 Editor</b> — <span id="status-text">orbit cam · move gizmo</span><br />
+    <span class="k">click</span> select · drag gizmo handles ·
+    <span class="k">G</span>/<span class="k">R</span>/<span class="k">S</span> gizmo mode ·
+    <span class="k">Del</span> delete · <span class="k">Esc</span> deselect
+  </div>
+
   <script type="module" src="./src/game.js"></script>
 </body>
 </html>
