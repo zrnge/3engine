@@ -5,6 +5,9 @@
  *
  * Behavior:
  *   - pointerdown on the panel's <h3> starts a drag; pointerup ends it
+ *   - a click (press+release without moving) is NOT swallowed, so buttons and
+ *     sliders inside the panel keep working — the drag only begins after the
+ *     pointer has moved a few pixels
  *   - the panel's inline top/left/right/bottom/transform are rewritten so the
  *     panel stays where you drop it (position:fixed + left/top)
  *   - the panel is clamped to the viewport so it can't be lost off-screen
@@ -12,34 +15,39 @@
  */
 export function makeDraggable(panel, handleSelector = 'h3') {
   const handle = panel.querySelector(handleSelector) || panel;
+  // a whole-panel handle would swallow every click inside the panel — skip it
+  if (handle === panel) return;
   handle.style.cursor = 'grab';
 
   handle.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    e.preventDefault();
 
     const rect = panel.getBoundingClientRect();
     const dx = e.clientX - rect.left;
     const dy = e.clientY - rect.top;
-
-    // freeze current visual position as fixed left/top (drops right/bottom/transform)
-    panel.style.left = `${rect.left}px`;
-    panel.style.top = `${rect.top}px`;
-    panel.style.right = 'auto';
-    panel.style.bottom = 'auto';
-    panel.style.transform = 'none';
-
-    handle.style.cursor = 'grabbing';
-    handle.setPointerCapture(e.pointerId);
+    let dragging = false;
 
     const onMove = (ev) => {
+      if (!dragging) {
+        // only start the drag (and take over the gesture) after real movement
+        if (Math.abs(ev.clientX - e.clientX) < 4 && Math.abs(ev.clientY - e.clientY) < 4) return;
+        dragging = true;
+        // freeze current visual position as fixed left/top (drops right/bottom/transform)
+        panel.style.left = `${rect.left}px`;
+        panel.style.top = `${rect.top}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        panel.style.transform = 'none';
+        handle.style.cursor = 'grabbing';
+        handle.setPointerCapture(e.pointerId);
+      }
       const x = Math.max(0, Math.min(ev.clientX - dx, window.innerWidth - rect.width));
       const y = Math.max(0, Math.min(ev.clientY - dy, window.innerHeight - rect.height));
       panel.style.left = `${x}px`;
       panel.style.top = `${y}px`;
     };
     const onUp = () => {
-      handle.style.cursor = 'grab';
+      if (dragging) handle.style.cursor = 'grab';
       handle.removeEventListener('pointermove', onMove);
       handle.removeEventListener('pointerup', onUp);
       handle.removeEventListener('pointercancel', onUp);
