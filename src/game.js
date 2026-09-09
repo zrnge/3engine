@@ -4,6 +4,8 @@ import { CameraRig } from './cameras.js';
 import { AssetLoader } from './loader.js';
 import { ObjectEditor, LightEntity } from './editor.js';
 import { makeDraggable } from './ui.js';
+import { History } from './history.js';
+import { SceneSerializer } from './scene.js';
 import { Entity } from './entity.js';
 import { Player } from './player.js';
 import { Coin } from './enemy.js';
@@ -33,10 +35,12 @@ rig.enabled = true;
 engine.cameraRig = rig;
 
 // ---- editor: gizmo + hierarchy + inspector ----
+const history = new History({ limit: 100 });
 const editor = new ObjectEditor(engine, {
   listEl: document.getElementById('scene-list'),
   inspectorEl: document.getElementById('inspector-body'),
   statusEl: document.getElementById('status-text'),
+  history,
   onModeChange: (mode) => {
     document.querySelectorAll('.gizmo-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.mode === mode));
@@ -86,7 +90,9 @@ function addPrimitive(kind) {
   const dir = engine.camera.getWorldDirection(new THREE.Vector3());
   mesh.position.copy(engine.camera.position).addScaledVector(dir, 8);
   mesh.position.y = Math.max(mesh.position.y, 1);
-  return addProp(mesh, kind[0].toUpperCase() + kind.slice(1));
+  const entity = addProp(mesh, kind[0].toUpperCase() + kind.slice(1));
+  editor.recordAdd(entity); // undoable
+  return entity;
 }
 
 function addLight(kind) {
@@ -115,6 +121,7 @@ function addLight(kind) {
   scene.add(light);
   const entity = new LightEntity(light, { point: 'Point Light', spot: 'Spot Light', ambient: 'Ambient Light' }[kind] || 'Directional Light');
   editor.register(entity);
+  editor.recordAdd(entity); // undoable
   editor.select(entity);
   return entity;
 }
@@ -161,7 +168,11 @@ document.querySelectorAll('[data-light]').forEach((b) =>
   b.addEventListener('click', () => addLight(b.dataset.light)));
 document.getElementById('btn-load-glb').addEventListener('click', () => {
   assets.pickAndLoad({ position: [0, 0, 0] }).then((obj) => {
-    if (obj) editor.select(addProp(obj, obj.name));
+    if (obj) {
+      const entity = addProp(obj, obj.name);
+      editor.recordAdd(entity); // undoable
+      editor.select(entity);
+    }
   });
 });
 
@@ -268,6 +279,52 @@ bindSlider('ctl-speed', (v) => { player.speed = v; });
 bindSlider('ctl-jump', (v) => { player.jumpVelocity = v; });
 renderBindings();
 
+// ---- scene save/load + undo/redo ----
+const serializer = new SceneSerializer(engine, editor, rig, player, assets);
+
+const undoBtn = document.getElementById('btn-undo');
+const redoBtn = document.getElementById('btn-redo');
+function refreshHistoryButtons() {
+  undoBtn.disabled = !history.canUndo;
+  redoBtn.disabled = !history.canRedo;
+}
+history.onChange = refreshHistoryButtons;
+undoBtn.addEventListener('click', () => history.undo());
+redoBtn.addEventListener('click', () => history.redo());
+document.getElementById('btn-save').addEventListener('click', () => serializer.saveToFile());
+document.getElementById('btn-load').addEventListener('click', () => {
+  serializer.loadFromFile().then((made) => {
+    if (made) { history.clear(); refreshCamTargets(); }
+  }).catch(() => {});
+});
+refreshHistoryButtons();
+
+// keyboard shortcuts for undo/redo/save/load (not while typing in a field)
+window.addEventListener('keydown', (e) => {
+  const a = document.activeElement;
+  const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') &&
+    a.type !== 'range' && a.type !== 'checkbox';
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.code === 'KeyZ' && !e.shiftKey) { e.preventDefault(); if (!typing) history.undo(); }
+  else if (mod && (e.code === 'KeyY' || (e.code === 'KeyZ' && e.shiftKey))) { e.preventDefault(); if (!typing) history.redo(); }
+  else if (mod && e.code === 'KeyS') { e.preventDefault(); serializer.saveToFile(); }
+  else if (mod && e.code === 'KeyO') {
+    e.preventDefault();
+    serializer.loadFromFile().then((made) => { if (made) { history.clear(); refreshCamTargets(); } }).catch(() => {});
+  }
+});
+
+// when a scene is loaded, refresh the player-controls panel to match
+window.addEventListener('tiny3:player-loaded', () => {
+  document.getElementById('ctl-enabled').checked = player.enabled;
+  document.getElementById('ctl-speed').value = player.speed;
+  document.getElementById('ctl-speed-v').textContent = player.speed;
+  document.getElementById('ctl-jump').value = player.jumpVelocity;
+  document.getElementById('ctl-jump-v').textContent = player.jumpVelocity;
+  renderBindings();
+  refreshCamTargets();
+});
+
 // ---- per-frame logic ----
 engine.onUpdate = (dt, eng) => {
   // camera hotkeys
@@ -278,7 +335,11 @@ engine.onUpdate = (dt, eng) => {
   // L — load a GLB model from disk
   if (input.wasPressed('KeyL')) {
     assets.pickAndLoad({ position: [0, 0, 0] }).then((obj) => {
-      if (obj) editor.select(addProp(obj, obj.name));
+      if (obj) {
+        const entity = addProp(obj, obj.name);
+        editor.recordAdd(entity);
+        editor.select(entity);
+      }
     });
   }
 

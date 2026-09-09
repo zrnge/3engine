@@ -26,18 +26,20 @@ const RAD = Math.PI / 180;
  *   editor.setGizmoMode('rotate');  // 'translate' | 'rotate' | 'scale'
  */
 export class ObjectEditor {
-  constructor(engine, { listEl = null, inspectorEl = null, statusEl = null, onModeChange = null } = {}) {
+  constructor(engine, { listEl = null, inspectorEl = null, statusEl = null, onModeChange = null, history = null } = {}) {
     this.engine = engine;
     this.listEl = listEl;
     this.inspectorEl = inspectorEl;
     this.statusEl = statusEl;
     this.onModeChange = onModeChange;
+    this.history = history; // optional History instance for undo/redo
 
     this.selectables = [];
     this.selected = null;
     this._raycaster = new THREE.Raycaster();
     this._gizmoMode = 'translate';
     this._texLoader = new THREE.TextureLoader();
+    this._dragStart = null; // transform snapshot for undoing gizmo drags
 
     // --- transform gizmo ---
     this.gizmo = new TransformControls(engine.camera, engine.renderer.domElement);
@@ -46,6 +48,8 @@ export class ObjectEditor {
     // don't let the orbit camera fight the gizmo while dragging its handles
     this.gizmo.addEventListener('dragging-changed', (e) => {
       if (engine.cameraRig) engine.cameraRig.enabled = !e.value;
+      if (e.value) this._dragStart = this._snapshot();       // drag began
+      else this._recordTransform();                          // drag ended
     });
 
     // --- selection highlight ---
@@ -153,6 +157,68 @@ export class ObjectEditor {
 
   get gizmoMode() { return this._gizmoMode; }
 
+  // ---------- undo/redo helpers ----------
+
+  /** Snapshot the selected object's transform (position/rotation/scale). */
+  _snapshot() {
+    const o = this.selected?.object3D;
+    if (!o) return null;
+    return {
+      position: o.position.clone(),
+      rotation: o.rotation.clone(),
+      scale: o.scale.clone(),
+    };
+  }
+
+  _applySnapshot(o, snap) {
+    o.position.copy(snap.position);
+    o.rotation.copy(snap.rotation);
+    o.scale.copy(snap.scale);
+    this._helper.setFromObject(o);
+    this._syncInspector();
+  }
+
+  /** After a gizmo drag ends, record the before/after transform for undo. */
+  _recordTransform() {
+    const before = this._dragStart;
+    this._dragStart = null;
+    const o = this.selected?.object3D;
+    if (!before || !o || !this.history) return;
+    const after = this._snapshot();
+    // ignore no-op drags (clicked a handle but didn't move)
+    if (before.position.equals(after.position) &&
+        before.rotation.equals(after.rotation) &&
+        before.scale.equals(after.scale)) return;
+    const self = this;
+    this.history.push({
+      label: 'transform',
+      undo() { self._applySnapshot(o, before); },
+      redo() { self._applySnapshot(o, after); },
+    });
+  }
+
+  /** Record an add/remove so it can be undone/redone. */
+  recordAdd(entity) { this._recordAddRemove(entity, true); }
+  recordRemove(entity) { this._recordAddRemove(entity, false); }
+
+  /** Record an add/remove so it can be undone/redone. */
+  _recordAddRemove(entity, added) {
+    if (!this.history) return;
+    const self = this;
+    const add = () => { self.engine.add(entity); self.register(entity); };
+    const remove = () => {
+      if (self.selected === entity) self.select(null);
+      if (typeof entity.destroy === 'function') entity.destroy(self.engine);
+      else self.engine.remove(entity);
+      self.unregister(entity);
+    };
+    this.history.push({
+      label: added ? 'add' : 'delete',
+      undo: added ? remove : add,
+      redo: added ? add : remove,
+    });
+  }
+
   // ---------- per-frame ----------
 
   update(_dt) {
@@ -207,6 +273,7 @@ export class ObjectEditor {
     if (typeof entity.destroy === 'function') entity.destroy(this.engine);
     else this.engine.remove(entity);
     this.unregister(entity);
+    this._recordAddRemove(entity, false); // undoable delete
   }
 
   // ---------- hierarchy panel ----------
@@ -304,6 +371,7 @@ export class ObjectEditor {
       entity.object3D.userData.kind = o.userData.kind;
       this.engine.add(entity);
       this.register(entity);
+      this._recordAddRemove(entity, true); // undoable duplicate
       this.select(entity);
     });
   }
