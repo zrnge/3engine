@@ -38,6 +38,7 @@ export class ObjectEditor {
     this.selected = null;
     this._raycaster = new THREE.Raycaster();
     this._gizmoMode = 'translate';
+    this.statusPrefix = ''; // e.g. '▶ PLAYING · ' while in play mode
     this._texLoader = new THREE.TextureLoader();
     this._dragStart = null; // transform snapshot for undoing gizmo drags
 
@@ -534,7 +535,7 @@ export class ObjectEditor {
     if (!this.statusEl) return;
     const cam = this.engine.cameraRig ? this.engine.cameraRig.mode : 'orbit';
     const sel = this.selected ? ` · selected: <b>${this._name(this.selected)}</b>` : '';
-    this.statusEl.innerHTML = `${cam} cam · ${this._gizmoMode} gizmo${sel}`;
+    this.statusEl.innerHTML = `${this.statusPrefix}${cam} cam · ${this._gizmoMode} gizmo${sel}`;
   }
 }
 

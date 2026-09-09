@@ -140,7 +140,7 @@ for (let i = 0; i < 4; i++) {
 
 // sample GLB model (Khronos Duck, CC-BY) — replace with your own in /assets
 assets.load('./assets/duck.glb', { scale: 0.05, position: [-2, 0, -4], name: 'Duck' })
-  .then((duck) => addProp(duck, 'Duck'))
+  .then((duck) => { if (!localStorage.getItem('tiny3.autosave')) addProp(duck, 'Duck'); })
   .catch((err) => console.warn('[Tiny3] duck.glb failed to load:', err));
 
 // debug handle
@@ -288,7 +288,7 @@ function refreshHistoryButtons() {
   undoBtn.disabled = !history.canUndo;
   redoBtn.disabled = !history.canRedo;
 }
-history.onChange = refreshHistoryButtons;
+history.onChange = () => { refreshHistoryButtons(); markDirty(); };
 undoBtn.addEventListener('click', () => history.undo());
 redoBtn.addEventListener('click', () => history.redo());
 document.getElementById('btn-save').addEventListener('click', () => serializer.saveToFile());
@@ -299,8 +299,72 @@ document.getElementById('btn-load').addEventListener('click', () => {
 });
 refreshHistoryButtons();
 
+// ---- play / edit mode ----
+// Edit mode: full editor. Play mode: editing is locked and the simulation
+// runs; stopping reverts the scene to the exact snapshot taken at Play.
+const playBtn = document.getElementById('btn-play');
+let playing = false;
+let playSnapshot = null;
+
+function enterPlay() {
+  if (playing) return;
+  playing = true;
+  playSnapshot = serializer.serialize();
+  editor.select(null);
+  player.enabled = true;
+  document.body.classList.add('playing');
+  playBtn.classList.add('playing');
+  playBtn.textContent = '⏹ Stop';
+  editor.statusPrefix = '▶ PLAYING · ';
+  editor._renderStatus();
+}
+
+async function exitPlay() {
+  if (!playing) return;
+  playing = false;
+  document.body.classList.remove('playing');
+  playBtn.classList.remove('playing');
+  playBtn.textContent = '▶ Play';
+  editor.statusPrefix = '';
+  const snap = playSnapshot;
+  playSnapshot = null;
+  if (snap) {
+    await serializer.deserialize(snap); // revert anything the simulation changed
+    history.clear();
+    refreshHistoryButtons();
+    refreshCamTargets();
+  }
+  editor._renderStatus();
+}
+
+playBtn.addEventListener('click', () => (playing ? exitPlay() : enterPlay()));
+window.addEventListener('keydown', (e) => { if (playing && e.code === 'Escape') exitPlay(); });
+
+// ---- autosave: persist the scene to localStorage shortly after any edit ----
+const AUTOSAVE_KEY = 'tiny3.autosave';
+let _dirtyTimer = null;
+
+function markDirty() {
+  if (playing) return; // play-mode changes are temporary — don't save them
+  clearTimeout(_dirtyTimer);
+  _dirtyTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(serializer.serialize()));
+    } catch (err) {
+      console.warn('[Tiny3] autosave failed:', err);
+    }
+  }, 1500);
+}
+
+// any field edit in any panel (inspector, camera, controls) marks dirty
+document.addEventListener('input', () => markDirty(), true);
+
+// debug/test handle
+window.__tiny3 = { enterPlay, exitPlay, isPlaying: () => playing, markDirty };
+
 // keyboard shortcuts for undo/redo/save/load (not while typing in a field)
 window.addEventListener('keydown', (e) => {
+  if (playing) return; // editing shortcuts are locked while playing
   const a = document.activeElement;
   const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') &&
     a.type !== 'range' && a.type !== 'checkbox';
@@ -327,24 +391,27 @@ window.addEventListener('tiny3:player-loaded', () => {
 
 // ---- per-frame logic ----
 engine.onUpdate = (dt, eng) => {
-  // camera hotkeys
-  if (input.wasPressed('Digit1')) setCamMode('orbit');
-  if (input.wasPressed('Digit2')) setCamMode('follow');
-  if (input.wasPressed('Digit4')) setCamMode('free');
+  if (!playing) {
+    // camera hotkeys
+    if (input.wasPressed('Digit1')) setCamMode('orbit');
+    if (input.wasPressed('Digit2')) setCamMode('follow');
+    if (input.wasPressed('Digit4')) setCamMode('free');
 
-  // L — load a GLB model from disk
-  if (input.wasPressed('KeyL')) {
-    assets.pickAndLoad({ position: [0, 0, 0] }).then((obj) => {
-      if (obj) {
-        const entity = addProp(obj, obj.name);
-        editor.recordAdd(entity);
-        editor.select(entity);
-      }
-    });
+    // L — load a GLB model from disk
+    if (input.wasPressed('KeyL')) {
+      assets.pickAndLoad({ position: [0, 0, 0] }).then((obj) => {
+        if (obj) {
+          const entity = addProp(obj, obj.name);
+          editor.recordAdd(entity);
+          editor.select(entity);
+        }
+      });
+    }
+
+    editor.update(dt); // selection, gizmo, delete — edit-mode only
   }
 
   if (rig.enabled !== false) rig.update(dt, input);
-  editor.update(dt);
 
   // keep the camera-target dropdown in sync with the hierarchy
   if (camTargetSel.options.length !== editor.selectables.length + 1) refreshCamTargets();
@@ -353,4 +420,22 @@ engine.onUpdate = (dt, eng) => {
 };
 
 refreshCamTargets();
+
+// restore the last autosaved scene (if any) so a refresh loses nothing
+(async () => {
+  try {
+    const saved = localStorage.getItem(AUTOSAVE_KEY);
+    if (!saved) return;
+    const made = await serializer.deserialize(JSON.parse(saved));
+    if (made && made.length) {
+      history.clear();
+      refreshHistoryButtons();
+      refreshCamTargets();
+      console.log('[Tiny3] restored autosaved scene');
+    }
+  } catch (err) {
+    console.warn('[Tiny3] autosave restore failed:', err);
+  }
+})();
+
 engine.start();

@@ -132,6 +132,20 @@
       display: inline-block; background: var(--accent-dim); border: 1px solid var(--border);
       border-radius: 4px; padding: 0 5px; font-size: 11px; color: var(--text);
     }
+
+    /* ---- play mode: editing is locked ---- */
+    #btn-play.playing { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+    body.playing #hierarchy,
+    body.playing #camera-panel,
+    body.playing #inspector,
+    body.playing #controls-panel { opacity: 0.45; pointer-events: none; }
+    body.playing .gizmo-btn,
+    body.playing #btn-load-glb,
+    body.playing #btn-undo,
+    body.playing #btn-redo,
+    body.playing #btn-save,
+    body.playing #btn-load { opacity: 0.45; pointer-events: none; }
+    body.playing #status { border-color: var(--accent); }
   </style>
   <script type="importmap">
     {
@@ -147,6 +161,8 @@
 <body>
   <!-- top toolbar: gizmo modes + camera modes -->
   <div id="toolbar" class="panel">
+    <button class="tbtn" id="btn-play" title="Play the scene — Esc to stop and revert">▶ Play</button>
+    <div class="sep"></div>
     <button class="tbtn gizmo-btn active" data-mode="translate" title="Move gizmo (G)">↖ Move <span class="k">G</span></button>
     <button class="tbtn gizmo-btn" data-mode="rotate" title="Rotate gizmo (R)">⟳ Rotate <span class="k">R</span></button>
     <button class="tbtn gizmo-btn" data-mode="scale" title="Scale gizmo (S)">⤢ Scale <span class="k">S</span></button>
@@ -232,7 +248,8 @@
     <b>Tiny3 Editor</b> — <span id="status-text">orbit cam · move gizmo</span><br />
     <span class="k">click</span> select · drag gizmo handles ·
     <span class="k">G</span>/<span class="k">R</span>/<span class="k">S</span> gizmo mode ·
-    <span class="k">Del</span> delete · <span class="k">Esc</span> deselect
+    <span class="k">Del</span> delete · <span class="k">Esc</span> deselect ·
+    <span class="k">▶</span> play · scene autosaves
   </div>
 
   <script type="module" src="./src/game.js"></script>
