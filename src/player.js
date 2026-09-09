@@ -50,6 +50,7 @@ export class Player extends Entity {
 
     // action callbacks — editor/game can hook into fire/jump/etc
     this.onFire = null; // set externally: (player, engine) => {}
+    this.onJump = null;
   }
 
   /** True if any bound key for an action is currently held. */
@@ -94,6 +95,7 @@ export class Player extends Entity {
     if (this._pressed(input, 'jump') && this.grounded) {
       this.velocityY = this.jumpVelocity;
       this.grounded = false;
+      if (typeof this.onJump === 'function') this.onJump(this, engine);
     }
 
     if (this._pressed(input, 'fire')) {

@@ -606,33 +606,64 @@ export class ObjectEditor {
     });
   }
 
-  // ---------- audio ----------
+  // ---------- audio (multiple sounds per entity) ----------
 
   _audioSection(entity) {
-    const rec = this.engine.sounds.find((s) => s.entity === entity);
-    return `
-      <h4 class="insp-h">Audio</h4>
-      <div class="prop-row"><span class="val" id="insp-audname">${rec ? rec.name : 'none'}</span></div>
-      <div class="insp-row" style="margin-top:4px">
-        <button class="tbtn" id="insp-aud-load">Load…</button>
-        <button class="tbtn" id="insp-aud-play" ${rec ? '' : 'disabled'}>${rec && rec.audio.isPlaying ? '⏸ Stop' : '▶ Play'}</button>
-        <button class="tbtn" id="insp-aud-clear" ${rec ? '' : 'disabled'}>Clear</button>
-      </div>
-      <div class="prop-row"><label>Volume</label>
-        <input type="range" id="insp-aud-vol" min="0" max="1" step="0.01" value="${rec ? rec.volume : 0.8}" ${rec ? '' : 'disabled'} />
-        <span class="val" id="insp-aud-vol-v">${(rec ? rec.volume : 0.8).toFixed(2)}</span></div>
-      <div class="prop-row"><label>Dist</label>
-        <input type="range" id="insp-aud-dist" min="1" max="50" step="1" value="${rec ? rec.refDistance : 5}" ${rec ? '' : 'disabled'} />
-        <span class="val" id="insp-aud-dist-v">${rec ? rec.refDistance : 5}</span></div>
-      <label class="check-row"><input type="checkbox" id="insp-aud-loop" ${rec?.loop ? 'checked' : ''} ${rec ? '' : 'disabled'}/> Loop</label>
-      <label class="check-row"><input type="checkbox" id="insp-aud-auto" ${rec?.autoplay ? 'checked' : ''} ${rec ? '' : 'disabled'}/> Autoplay</label>`;
+    const list = this.engine.sounds.filter((s) => s.entity === entity);
+    let html = '<h4 class="insp-h">Audio</h4>';
+    if (!list.length) {
+      html += '<div class="empty">No sounds attached.</div>';
+    }
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i];
+      html += `
+        <div class="aud-card" data-idx="${i}" style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin-bottom:8px;">
+          <div class="prop-row" style="grid-template-columns: 1fr auto; gap:6px; margin-bottom:4px;">
+            <input class="obj-name" style="margin:0" id="insp-aud-name-${i}" value="${r.name}" spellcheck="false" />
+            <button class="tbtn danger" data-aud="del-${i}" style="padding:2px 7px; font-size:12px">×</button>
+          </div>
+          <div class="prop-row"><label>Type</label>
+            <select id="insp-aud-type-${i}">
+              <option value="positional" ${r.type === 'positional' ? 'selected' : ''}>Positional</option>
+              <option value="ambient" ${r.type === 'ambient' ? 'selected' : ''}>Ambient</option>
+              <option value="global" ${r.type === 'global' ? 'selected' : ''}>Global</option>
+            </select>
+          </div>
+          <div class="prop-row"><label>Trigger</label>
+            <select id="insp-aud-trig-${i}">
+              <option value="" ${!r.trigger ? 'selected' : ''}>— none / always —</option>
+              <option value="fire" ${r.trigger === 'fire' ? 'selected' : ''}>Fire action</option>
+              <option value="jump" ${r.trigger === 'jump' ? 'selected' : ''}>Jump action</option>
+              <option value="spawn" ${r.trigger === 'spawn' ? 'selected' : ''}>On spawn</option>
+            </select>
+          </div>
+          <div class="insp-row" style="margin-top:4px">
+            <button class="tbtn" data-aud="play-${i}">${r.audio.isPlaying ? '⏸ Stop' : '▶ Play'}</button>
+            <button class="tbtn" data-aud="clr-${i}">Clear</button>
+          </div>
+          <div class="prop-row"><label>Volume</label>
+            <input type="range" id="insp-aud-vol-${i}" min="0" max="1" step="0.01" value="${r.volume}" />
+            <span class="val" id="insp-aud-vol-v-${i}">${r.volume.toFixed(2)}</span></div>
+          <div class="prop-row"><label>Dist</label>
+            <input type="range" id="insp-aud-dist-${i}" min="1" max="50" step="1" value="${r.refDistance}" />
+            <span class="val" id="insp-aud-dist-v-${i}">${r.refDistance}</span></div>
+          <label class="check-row"><input type="checkbox" id="insp-aud-loop-${i}" ${r.loop ? 'checked' : ''}/> Loop</label>
+          <label class="check-row"><input type="checkbox" id="insp-aud-auto-${i}" ${r.autoplay ? 'checked' : ''}/> Autoplay</label>
+        </div>`;
+    }
+    html += `
+      <div class="insp-row" style="margin-top:8px">
+        <button class="tbtn" id="insp-aud-add">＋ Add sound</button>
+      </div>`;
+    return html;
   }
 
   _wireAudioSection(entity) {
     const q = (s) => this.inspectorEl.querySelector(s);
-    const rec = () => this.engine.sounds.find((s) => s.entity === entity);
+    const list = () => this.engine.sounds.filter((s) => s.entity === entity);
 
-    q('#insp-aud-load').addEventListener('click', () => {
+    // Add a new sound slot (file picker -> create record)
+    q('#insp-aud-add').addEventListener('click', () => {
       const picker = document.createElement('input');
       picker.type = 'file';
       picker.accept = 'audio/*';
@@ -642,71 +673,106 @@ export class ObjectEditor {
         const url = URL.createObjectURL(file);
         this._audioLoader.load(url, (buffer) => {
           URL.revokeObjectURL(url);
-          // remove any existing sound on this entity
-          this._clearSound(entity);
-          const audio = new THREE.PositionalAudio(this.engine.listener);
-          audio.setBuffer(buffer);
-          audio.setRefDistance(5);
-          entity.object3D.add(audio);
-          this.engine.sounds.push({
-            entity, audio, name: file.name,
-            volume: 0.8, loop: false, autoplay: false, refDistance: 5,
-          });
-          this._renderInspector(); // rebuild to enable the controls
+          this.engine.addSound(entity, buffer, { name: file.name, type: 'positional' });
+          this._renderInspector();
         });
       });
       picker.click();
     });
 
-    q('#insp-aud-play').addEventListener('click', () => {
-      const r = rec();
-      if (!r) return;
-      this.engine.unlockAudio();
-      if (r.audio.isPlaying) r.audio.stop(); else r.audio.play();
-      this._renderInspector();
-    });
+    // per-card wiring
+    list().forEach((r, i) => {
+      // name
+      q(`#insp-aud-name-${i}`).addEventListener('input', (e) => { r.name = e.target.value; });
 
-    q('#insp-aud-clear').addEventListener('click', () => {
-      this._clearSound(entity);
-      this._renderInspector();
-    });
+      // type
+      q(`#insp-aud-type-${i}`).addEventListener('change', (e) => {
+        this._changeSoundType(r, e.target.value);
+        this._renderInspector();
+      });
 
-    const vol = q('#insp-aud-vol');
-    vol.addEventListener('input', () => {
-      const r = rec(); if (!r) return;
-      r.volume = parseFloat(vol.value);
-      r.audio.setVolume(r.volume);
-      q('#insp-aud-vol-v').textContent = r.volume.toFixed(2);
-    });
+      // trigger
+      q(`#insp-aud-trig-${i}`).addEventListener('change', (e) => { r.trigger = e.target.value || null; });
 
-    const dist = q('#insp-aud-dist');
-    dist.addEventListener('input', () => {
-      const r = rec(); if (!r) return;
-      r.refDistance = parseInt(dist.value, 10);
-      r.audio.setRefDistance(r.refDistance);
-      q('#insp-aud-dist-v').textContent = String(r.refDistance);
-    });
+      // play/stop
+      q(`[data-aud="play-${i}"]`).addEventListener('click', () => {
+        this.engine.unlockAudio();
+        if (r.audio.isPlaying) r.audio.stop(); else r.audio.play();
+        this._renderInspector();
+      });
 
-    q('#insp-aud-loop').addEventListener('change', (e) => {
-      const r = rec(); if (!r) return;
-      r.loop = e.target.checked;
-      r.audio.setLoop(r.loop);
-    });
+      // clear this sound
+      q(`[data-aud="clr-${i}"]`).addEventListener('click', () => {
+        this.engine.removeSound(r);
+        this._renderInspector();
+      });
 
-    q('#insp-aud-auto').addEventListener('change', (e) => {
-      const r = rec(); if (!r) return;
-      r.autoplay = e.target.checked;
+      // delete this sound
+      q(`[data-aud="del-${i}"]`).addEventListener('click', () => {
+        this.engine.removeSound(r);
+        this._renderInspector();
+      });
+
+      // volume
+      const vol = q(`#insp-aud-vol-${i}`);
+      vol.addEventListener('input', () => {
+        r.volume = parseFloat(vol.value);
+        r.audio.setVolume(r.volume);
+        q(`#insp-aud-vol-v-${i}`).textContent = r.volume.toFixed(2);
+      });
+
+      // distance
+      const dist = q(`#insp-aud-dist-${i}`);
+      dist.addEventListener('input', () => {
+        r.refDistance = parseInt(dist.value, 10);
+        if (r.type === 'positional') r.audio.setRefDistance(r.refDistance);
+        q(`#insp-aud-dist-v-${i}`).textContent = String(r.refDistance);
+      });
+
+      // loop
+      q(`#insp-aud-loop-${i}`).addEventListener('change', (e) => {
+        r.loop = e.target.checked;
+        r.audio.setLoop(r.loop);
+      });
+
+      // autoplay
+      q(`#insp-aud-auto-${i}`).addEventListener('change', (e) => {
+        r.autoplay = e.target.checked;
+      });
     });
   }
 
+  _changeSoundType(rec, newType) {
+    const wasPlaying = rec.audio.isPlaying;
+    const currentTime = rec.audio.context.currentTime;
+    if (rec.audio.isPlaying) rec.audio.stop();
+
+    // detach old audio node
+    if (rec.type === 'positional') {
+      rec.entity.object3D.remove(rec.audio);
+    }
+    rec.audio.disconnect?.();
+
+    // build new audio node of the requested type, preserving buffer + settings
+    let audio;
+    if (newType === 'positional') {
+      audio = new THREE.PositionalAudio(this.engine.listener);
+      audio.setRefDistance(rec.refDistance);
+      rec.entity.object3D.add(audio);
+    } else {
+      audio = new THREE.Audio(this.engine.listener);
+    }
+    audio.setBuffer(rec.audio.buffer);
+    audio.setVolume(rec.volume);
+    audio.setLoop(rec.loop);
+    rec.type = newType;
+    rec.audio = audio;
+
+    if (wasPlaying && newType !== 'positional') audio.play(currentTime);
+  }
+
   _clearSound(entity) {
-    const i = this.engine.sounds.findIndex((s) => s.entity === entity);
-    if (i === -1) return;
-    const r = this.engine.sounds[i];
-    if (r.audio.isPlaying) r.audio.stop();
-    entity.object3D.remove(r.audio);
-    r.audio.disconnect?.();
-    this.engine.sounds.splice(i, 1);
+    this.engine.clearEntitySounds(entity);
   }
 
   /** Refresh inspector numbers without rebuilding the DOM (used while dragging). */

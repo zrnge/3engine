@@ -34,7 +34,13 @@ export class Engine {
 
     // animation + audio registries (editor features)
     this.mixers = [];          // { root, mixer, clips, actions, current, speed, loop }
-    this.sounds = [];          // { entity, audio, name, volume, loop, autoplay, refDistance }
+
+    // sounds: each entity can have multiple sounds.
+    // Sound type determines behavior:
+    //   'positional' -> THREE.PositionalAudio attached to the entity
+    //   'ambient'    -> THREE.Audio added to the global listener
+    //   'global'     -> THREE.Audio added to the global listener
+    this.sounds = [];          // { entity, name, type, audio, volume, loop, autoplay, refDistance, trigger }
 
     // one shared audio listener attached to the camera
     this.listener = new THREE.AudioListener();
@@ -88,21 +94,104 @@ export class Engine {
     if (ctx.state === 'suspended') ctx.resume();
   }
 
-  /** Play the positional audio attached to an entity (one-shot or restart). */
-  playEntitySound(entity, { loop = null } = {}) {
-    const rec = this.sounds.find((s) => s.entity === entity);
-    if (!rec) return false;
+  /**
+   * Add a sound to an entity.
+   * @param {Object} entity
+   * @param {ArrayBuffer} buffer
+   * @param {Object} opts
+   * @param {string} opts.name
+   * @param {'positional'|'ambient'|'global'} opts.type
+   * @param {number} [opts.volume=1]
+   * @param {boolean} [opts.loop=false]
+   * @param {boolean} [opts.autoplay=false]
+   * @param {number} [opts.refDistance=5]
+   * @param {string|null} [opts.trigger=null]  // 'fire' etc. for action sounds
+   */
+  addSound(entity, buffer, opts = {}) {
+    const type = opts.type || 'positional';
+    const name = opts.name || 'sound';
+    const volume = opts.volume ?? 1;
+    const loop = !!opts.loop;
+    const autoplay = !!opts.autoplay;
+    const refDistance = opts.refDistance ?? 5;
+    const trigger = opts.trigger || null;
+
+    let audio;
+    if (type === 'positional') {
+      audio = new THREE.PositionalAudio(this.listener);
+      audio.setRefDistance(refDistance);
+      entity.object3D.add(audio);
+    } else {
+      audio = new THREE.Audio(this.listener);
+    }
+    audio.setBuffer(buffer);
+    audio.setVolume(volume);
+    audio.setLoop(loop);
+
+    const rec = {
+      entity, name, type, audio,
+      volume, loop, autoplay, refDistance, trigger,
+    };
+    this.sounds.push(rec);
+
+    if (autoplay && type !== 'positional') {
+      this.unlockAudio();
+      audio.play();
+    }
+
+    return rec;
+  }
+
+  /** Remove a specific sound record. */
+  removeSound(rec) {
+    const i = this.sounds.indexOf(rec);
+    if (i === -1) return;
+    if (rec.audio.isPlaying) rec.audio.stop();
+    if (rec.type === 'positional') {
+      rec.entity.object3D.remove(rec.audio);
+    }
+    rec.audio.disconnect?.();
+    this.sounds.splice(i, 1);
+  }
+
+  /** Remove every sound attached to an entity. */
+  clearEntitySounds(entity) {
+    for (const rec of this.sounds.filter((s) => s.entity === entity)) {
+      this.removeSound(rec);
+    }
+  }
+
+  /** Play all sounds on an entity matching a trigger (or all if no trigger). */
+  playEntitySounds(entity, { trigger = null, loop = null } = {}) {
+    const matches = this.sounds.filter((s) => s.entity === entity && (!trigger || s.trigger === trigger));
+    if (!matches.length) return false;
     this.unlockAudio();
-    if (rec.audio.isPlaying) {
-      if (!rec.loop) rec.audio.stop();
-      else return true; // already looping, leave it
+    for (const rec of matches) {
+      if (loop !== null) {
+        rec.loop = !!loop;
+        rec.audio.setLoop(rec.loop);
+      }
+      if (rec.audio.isPlaying) {
+        if (!rec.loop) rec.audio.stop();
+        else continue;
+      }
+      rec.audio.play();
     }
-    if (loop !== null) {
-      rec.loop = !!loop;
-      rec.audio.setLoop(rec.loop);
-    }
-    rec.audio.play();
     return true;
+  }
+
+  /** Stop all sounds on an entity. */
+  stopEntitySounds(entity) {
+    for (const rec of this.sounds.filter((s) => s.entity === entity)) {
+      if (rec.audio.isPlaying) rec.audio.stop();
+    }
+  }
+
+  /** Stop every sound in the engine (used when exiting play mode). */
+  stopAllSounds() {
+    for (const rec of this.sounds) {
+      if (rec.audio.isPlaying) rec.audio.stop();
+    }
   }
 
   _onResize() {

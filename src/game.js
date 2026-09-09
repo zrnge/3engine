@@ -53,7 +53,12 @@ player.object3D.userData.kind = 'Player';
 editor.register(player);
 player.onFire = (p, eng) => {
   if (muteCheck.checked) return;
-  eng.playEntitySound(p, { loop: false });
+  eng.playEntitySounds(p, { trigger: 'fire' });
+};
+
+player.onJump = (p, eng) => {
+  if (muteCheck.checked) return;
+  eng.playEntitySounds(p, { trigger: 'jump' });
 };
 rig.setMode('orbit', { target: player.object3D });
 
@@ -289,14 +294,14 @@ document.getElementById('ctl-enabled').addEventListener('change', (e) => {
 bindSlider('ctl-speed', (v) => { player.speed = v; });
 bindSlider('ctl-jump', (v) => { player.jumpVelocity = v; });
 
-// mute toggle
+// mute toggle (defensive: the controls panel may be absent in a cached/old HTML)
 const muteCheck = document.getElementById('aud-mute');
 function refreshMute() {
-  const muted = muteCheck.checked;
+  const muted = muteCheck?.checked ?? false;
   // Three.js AudioListener exposes the master gain node as `.gain`
   if (engine.listener.gain) engine.listener.gain.value = muted ? 0 : 1;
 }
-muteCheck.addEventListener('change', refreshMute);
+if (muteCheck) muteCheck.addEventListener('change', refreshMute);
 
 // test tone buttons
 const testBtn = document.getElementById('aud-test');
@@ -304,13 +309,14 @@ const stopTestBtn = document.getElementById('aud-stop-test');
 function stopTestTone() {
   if (_testOsc) { _testOsc.stop(); _testOsc.disconnect(); _testOsc = null; }
   if (_testGain) { _testGain.disconnect(); _testGain = null; }
-  testBtn.disabled = false; stopTestBtn.disabled = true;
+  if (testBtn) testBtn.disabled = false;
+  if (stopTestBtn) stopTestBtn.disabled = true;
 }
 function startTestTone() {
   engine.unlockAudio();
   const ctx = engine.listener.context;
   if (!ctx) return;
-  if (muteCheck.checked) return;
+  if (muteCheck?.checked) return;
   _testGain = ctx.createGain();
   _testGain.gain.value = 0.15;
   _testGain.connect(ctx.destination);
@@ -326,10 +332,11 @@ function startTestTone() {
   _testGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
   _testOsc.stop(ctx.currentTime + 0.28);
   _testOsc.onended = stopTestTone;
-  testBtn.disabled = true; stopTestBtn.disabled = false;
+  if (testBtn) testBtn.disabled = true;
+  if (stopTestBtn) stopTestBtn.disabled = false;
 }
-testBtn.addEventListener('click', startTestTone);
-stopTestBtn.addEventListener('click', stopTestTone);
+if (testBtn) testBtn.addEventListener('click', startTestTone);
+if (stopTestBtn) stopTestBtn.addEventListener('click', stopTestTone);
 
 renderBindings();
 
@@ -371,6 +378,19 @@ function enterPlay() {
   playBtn.textContent = '⏹ Stop';
   editor.statusPrefix = '▶ PLAYING · ';
   editor._renderStatus();
+  // start ambient/global autoplay sounds
+  engine.unlockAudio();
+  for (const rec of engine.sounds) {
+    if (rec.autoplay && rec.type !== 'positional' && !rec.audio.isPlaying) {
+      rec.audio.play();
+    }
+  }
+  // start positional autoplay sounds
+  for (const rec of engine.sounds) {
+    if (rec.autoplay && rec.type === 'positional' && !rec.audio.isPlaying) {
+      rec.audio.play();
+    }
+  }
 }
 
 async function exitPlay() {
@@ -382,6 +402,7 @@ async function exitPlay() {
   editor.statusPrefix = '';
   const snap = playSnapshot;
   playSnapshot = null;
+  engine.stopAllSounds();
   if (snap) {
     await serializer.deserialize(snap); // revert anything the simulation changed
     history.clear();
@@ -441,7 +462,11 @@ window.addEventListener('tiny3:player-loaded', () => {
   document.getElementById('ctl-jump-v').textContent = player.jumpVelocity;
   player.onFire = (p, eng) => {
     if (muteCheck.checked) return;
-    eng.playEntitySound(p, { loop: false });
+    eng.playEntitySounds(p, { trigger: 'fire' });
+  };
+  player.onJump = (p, eng) => {
+    if (muteCheck.checked) return;
+    eng.playEntitySounds(p, { trigger: 'jump' });
   };
   renderBindings();
   refreshCamTargets();

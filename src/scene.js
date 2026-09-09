@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { AudioLoader } from 'three';
 import { Entity } from './entity.js';
 import { Player } from './player.js';
 import { Coin } from './enemy.js';
@@ -72,6 +73,7 @@ export class SceneSerializer {
     this.rig = rig;
     this.player = player;
     this.assets = assets;
+    this._audioLoader = new AudioLoader();
   }
 
   // ---------- serialize ----------
@@ -144,25 +146,25 @@ export class SceneSerializer {
 
     // player
     if (entity === this.player) {
-      return { ...base, type: 'player' };
+      return { ...base, type: 'player', sounds: this._serializeSounds(entity) };
     }
 
     // coin
     if (entity instanceof Coin) {
-      return { ...base, type: 'coin' };
+      return { ...base, type: 'coin', sounds: this._serializeSounds(entity) };
     }
 
     // GLB model (loaded from a real URL, not a blob — blobs can't persist)
     const assetUrl = o.userData.assetUrl;
     if (assetUrl && !assetUrl.startsWith('blob:')) {
-      return { ...base, type: 'model', assetUrl };
+      return { ...base, type: 'model', assetUrl, sounds: this._serializeSounds(entity) };
     }
 
     // primitive prop
     const mesh = firstMesh(o);
     const kind = mesh ? primitiveKind(mesh.geometry) : null;
     if (mesh && kind) {
-      const d = { ...base, type: 'primitive', primitive: kind };
+      const d = { ...base, type: 'primitive', primitive: kind, sounds: this._serializeSounds(entity) };
       const m = mesh.material;
       if (m && m.isMeshStandardMaterial) {
         d.material = {
@@ -192,6 +194,20 @@ export class SceneSerializer {
     };
   }
 
+  _serializeSounds(entity) {
+    const recs = this.engine.sounds.filter((s) => s.entity === entity);
+    if (!recs.length) return undefined;
+    return recs.map((r) => ({
+      name: r.name,
+      type: r.type,
+      volume: round(r.volume),
+      loop: !!r.loop,
+      autoplay: !!r.autoplay,
+      refDistance: round(r.refDistance),
+      trigger: r.trigger || undefined,
+    }));
+  }
+
   // ---------- deserialize ----------
 
   async deserialize(data) {
@@ -201,6 +217,9 @@ export class SceneSerializer {
 
     // wipe current editable scene
     this.editor.select(null);
+    // stop + drop all sounds before destroying objects so nodes detach cleanly
+    this.engine.stopAllSounds();
+    this.engine.sounds = [];
     for (const entity of [...this.editor.selectables]) {
       if (typeof entity.destroy === 'function') entity.destroy(this.engine);
       else this.engine.remove(entity);
@@ -271,16 +290,20 @@ export class SceneSerializer {
           light.target.position.set(...d.targetPosition);
           this.engine.scene.add(light.target);
         }
-        return new LightEntity(light, d.name || 'Light');
+        const entity = new LightEntity(light, d.name || 'Light');
+        await this._attachSounds(entity, d.sounds);
+        return entity;
       }
       case 'player': {
         apply(this.player.object3D);
+        await this._attachSounds(this.player, d.sounds);
         return this.player;
       }
       case 'coin': {
         const coin = new Coin(d.position?.[0] ?? 0, d.position?.[2] ?? 0);
         apply(coin.object3D);
         coin.object3D.userData.kind = 'Coin';
+        await this._attachSounds(coin, d.sounds);
         return coin;
       }
       case 'model': {
@@ -288,7 +311,9 @@ export class SceneSerializer {
         apply(obj);
         obj.userData.assetUrl = d.assetUrl;
         obj.userData.kind = 'Prop';
-        return new Entity(obj);
+        const entity = new Entity(obj);
+        await this._attachSounds(entity, d.sounds);
+        return entity;
       }
       case 'primitive': {
         const geo = (PRIMITIVE_GEOS[d.primitive] || PRIMITIVE_GEOS.box)();
@@ -305,7 +330,9 @@ export class SceneSerializer {
         mesh.castShadow = mesh.receiveShadow = true;
         apply(mesh);
         mesh.userData.kind = 'Prop';
-        return new Entity(mesh);
+        const entity = new Entity(mesh);
+        await this._attachSounds(entity, d.sounds);
+        return entity;
       }
       default:
         console.warn('[Tiny3] scene load: unknown entity type', d.type);
@@ -325,6 +352,26 @@ export class SceneSerializer {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async _attachSounds(entity, sounds) {
+    if (!sounds || !sounds.length) return;
+    for (const s of sounds) {
+      try {
+        const buffer = await this._audioLoader.loadAsync(s.url || s.name);
+        this.engine.addSound(entity, buffer, {
+          name: s.name,
+          type: s.type || 'positional',
+          volume: s.volume ?? 1,
+          loop: !!s.loop,
+          autoplay: !!s.autoplay,
+          refDistance: s.refDistance ?? 5,
+          trigger: s.trigger || null,
+        });
+      } catch (err) {
+        console.warn('[Tiny3] could not restore sound:', s.name, err);
+      }
+    }
   }
 
   /** Open a file picker and load a .json scene. Resolves to the rebuilt entities. */
