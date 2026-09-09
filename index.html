@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tiny3 Engine — Cube Runner Demo</title>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0e14; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; top: 12px; left: 12px;
+      color: #e6edf3; font-family: system-ui, sans-serif; font-size: 14px;
+      background: rgba(13, 17, 23, 0.7); padding: 10px 14px; border-radius: 8px;
+      pointer-events: none; user-select: none; line-height: 1.5;
+    }
+    #hud b { color: #4dd0a6; }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "./lib/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="hud">
+    <b>Tiny3 Engine</b> — Cube Runner<br />
+    Score: <span id="score">0</span> &nbsp;|&nbsp; Lives: <span id="lives">3</span><br />
+    Move: <b>WASD / Arrows</b> &nbsp; Jump: <b>Space</b> &nbsp; Pause: <b>P</b>
+  </div>
+  <script type="module" src="./src/game.js"></script>
+</body>
+</html>
