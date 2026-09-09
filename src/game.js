@@ -229,9 +229,19 @@ function bindSlider(id, fn) {
 bindSlider('cam-fov', (v) => rig.setFov(v));
 bindSlider('cam-offset', (v) => { rig.followOffset = v; });
 bindSlider('cam-height', (v) => { rig.followHeight = v; });
+bindSlider('cam-lookup', (v) => { rig.followLookUp = v; });
+bindSlider('cam-ahead', (v) => { rig.followLookAhead = v; });
 bindSlider('cam-lerp', (v) => { rig.followLerp = v; });
+bindSlider('cam-damp', (v) => { rig.followDamping = v; });
+bindSlider('cam-orbit-h', (v) => { rig.orbitHeight = v; });
 document.getElementById('cam-rotate').addEventListener('change', (e) => {
   rig.rotateWithTarget = e.target.checked;
+});
+document.getElementById('cam-lock-y').addEventListener('change', (e) => {
+  rig.followLockY = e.target.checked;
+});
+document.getElementById('cam-orbit-lock').addEventListener('change', (e) => {
+  rig.orbitLockTarget = e.target.checked;
 });
 
 // ---- player controls panel: rebindable keys + tuning ----

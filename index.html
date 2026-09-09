@@ -214,10 +214,24 @@
       <div class="prop-row"><label>Height</label>
         <input type="range" id="cam-height" min="0" max="12" step="0.5" value="3" />
         <span class="val" id="cam-height-v">3</span></div>
+      <div class="prop-row"><label>Look up</label>
+        <input type="range" id="cam-lookup" min="-2" max="6" step="0.25" value="1" />
+        <span class="val" id="cam-lookup-v">1</span></div>
+      <div class="prop-row"><label>Look ahead</label>
+        <input type="range" id="cam-ahead" min="0" max="10" step="0.25" value="0" />
+        <span class="val" id="cam-ahead-v">0</span></div>
       <div class="prop-row"><label>Smooth</label>
         <input type="range" id="cam-lerp" min="1" max="20" step="0.5" value="8" />
         <span class="val" id="cam-lerp-v">8</span></div>
+      <div class="prop-row"><label>Damping</label>
+        <input type="range" id="cam-damp" min="0" max="2" step="0.05" value="1" />
+        <span class="val" id="cam-damp-v">1</span></div>
+      <div class="prop-row"><label>Orbit H</label>
+        <input type="range" id="cam-orbit-h" min="-5" max="10" step="0.5" value="0" />
+        <span class="val" id="cam-orbit-h-v">0</span></div>
       <label class="check-row"><input type="checkbox" id="cam-rotate" checked /> Rotate with target</label>
+      <label class="check-row"><input type="checkbox" id="cam-lock-y" /> Lock follow Y (top-down)</label>
+      <label class="check-row"><input type="checkbox" id="cam-orbit-lock" checked /> Orbit locks to target</label>
     </div>
   </div>
 

@@ -36,6 +36,11 @@ export class CameraRig {
     this.followLerp = 8;      // smoothing: higher = snappier (1/sec)
     this.followLookUp = 1;    // look-at height above the target's origin
     this.rotateWithTarget = true; // camera swings with the target's heading
+    this.followLockY = false; // keep the camera's own Y level (useful for top-down)
+    this.followLookAhead = 0; // meters to look ahead of the target's forward vector
+    this.followDamping = 1; // 0 = no smoothing, 1 = normal followLerp smoothing
+    this.orbitHeight = 0;     // extra Y added to the orbit look-at target
+    this.orbitLockTarget = true; // orbit look-at stays tied to the target, or free pivot
 
     // fps / free yaw-pitch state
     this.yaw = 0;
@@ -102,11 +107,13 @@ export class CameraRig {
 
   _orbit(_dt, input) {
     this.distance = THREE.MathUtils.clamp(this.distance + input.wheel * 0.01, 3, 60);
-    if (this.target) this.lookAt.lerp(this.target.position, 0.15);
+    if (this.target && this.orbitLockTarget) {
+      this.lookAt.lerp(this.target.position, 0.15);
+    }
     const sinPhi = Math.sin(this.phi);
     this.camera.position.set(
       this.lookAt.x + this.distance * sinPhi * Math.sin(this.theta),
-      this.lookAt.y + this.distance * Math.cos(this.phi),
+      this.lookAt.y + this.distance * Math.cos(this.phi) + this.orbitHeight,
       this.lookAt.z + this.distance * sinPhi * Math.cos(this.theta)
     );
     this.camera.lookAt(this.lookAt);
@@ -118,15 +125,25 @@ export class CameraRig {
       this.followOffset + input.wheel * 0.01, 1, 40);
     const t = this.target.position;
     const heading = this.rotateWithTarget ? this.target.rotation.y : this.yaw;
+
+    // desired camera position behind the target
     const desired = new THREE.Vector3(
       t.x - Math.sin(heading) * this.followOffset,
-      t.y + this.followHeight,
+      this.followLockY ? this.camera.position.y : (t.y + this.followHeight),
       t.z - Math.cos(heading) * this.followOffset
     );
+
     // frame-rate independent smoothing; followLerp is "per second"
-    const k = 1 - Math.exp(-this.followLerp * dt);
+    const k = 1 - Math.exp(-this.followLerp * dt * this.followDamping);
     this.camera.position.lerp(desired, k);
-    this.camera.lookAt(t.x, t.y + this.followLookUp, t.z);
+
+    // look at the target, optionally ahead of its forward vector
+    const look = new THREE.Vector3(
+      t.x + Math.sin(heading) * this.followLookAhead,
+      t.y + this.followLookUp,
+      t.z + Math.cos(heading) * this.followLookAhead
+    );
+    this.camera.lookAt(look);
   }
 
   _fps(dt, input) {
