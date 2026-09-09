@@ -51,14 +51,18 @@ const editor = new ObjectEditor(engine, {
 const player = engine.add(new Player());
 player.object3D.userData.kind = 'Player';
 editor.register(player);
+function controlledEntity(p) {
+  return p.target || p;
+}
+
 player.onFire = (p, eng) => {
   if (muteCheck.checked) return;
-  eng.playEntitySounds(p, { trigger: 'fire' });
+  eng.playEntitySounds(controlledEntity(p), { trigger: 'fire' });
 };
 
 player.onJump = (p, eng) => {
   if (muteCheck.checked) return;
-  eng.playEntitySounds(p, { trigger: 'jump' });
+  eng.playEntitySounds(controlledEntity(p), { trigger: 'jump' });
 };
 rig.setMode('orbit', { target: player.object3D });
 
@@ -247,9 +251,36 @@ document.getElementById('cam-orbit-lock').addEventListener('change', (e) => {
 // ---- player controls panel: rebindable keys + tuning ----
 const BIND_ACTIONS = ['forward', 'back', 'left', 'right', 'jump', 'fire'];
 const bindList = document.getElementById('bind-list');
+const ctlTargetSel = document.getElementById('ctl-target');
 let listeningBtn = null;
 let _testOsc = null;
 let _testGain = null;
+
+function refreshControlTargets() {
+  const current = player.target;
+  ctlTargetSel.innerHTML = '';
+  editor.selectables.forEach((e, i) => {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = e.object3D.name || e.constructor.name;
+    ctlTargetSel.appendChild(opt);
+  });
+  let idx = editor.selectables.findIndex((e) => e === current);
+  if (idx === -1) {
+    // fall back to entity named 'Player', otherwise the first available entity
+    idx = editor.selectables.findIndex((e) => (e.object3D.name || '').toLowerCase() === 'player');
+    if (idx === -1) idx = 0;
+    player.target = editor.selectables[idx] || null;
+  }
+  ctlTargetSel.value = String(idx);
+}
+
+ctlTargetSel.addEventListener('change', () => {
+  const i = parseInt(ctlTargetSel.value, 10);
+  const entity = Number.isInteger(i) ? editor.selectables[i] : null;
+  player.target = entity || null;
+  refreshControlTargets();
+});
 
 function prettyCode(code) {
   if (code.startsWith('Arrow')) return code.slice(5) + ' arrow';
@@ -365,7 +396,7 @@ redoBtn.addEventListener('click', () => history.redo());
 document.getElementById('btn-save').addEventListener('click', () => serializer.saveToFile());
 document.getElementById('btn-load').addEventListener('click', () => {
   serializer.loadFromFile().then((made) => {
-    if (made) { history.clear(); refreshCamTargets(); }
+    if (made) { history.clear(); refreshCamTargets(); refreshControlTargets(); }
   }).catch(() => {});
 });
 refreshHistoryButtons();
@@ -418,6 +449,7 @@ async function exitPlay() {
     history.clear();
     refreshHistoryButtons();
     refreshCamTargets();
+    refreshControlTargets();
   }
   editor._renderStatus();
 }
@@ -445,7 +477,7 @@ function markDirty() {
 document.addEventListener('input', () => markDirty(), true);
 
 // debug/test handle
-window.__tiny3 = { enterPlay, exitPlay, isPlaying: () => playing, markDirty };
+window.__tiny3 = { enterPlay, exitPlay, isPlaying: () => playing, markDirty, serializer, editor };
 
 // keyboard shortcuts for undo/redo/save/load (not while typing in a field)
 window.addEventListener('keydown', (e) => {
@@ -459,7 +491,7 @@ window.addEventListener('keydown', (e) => {
   else if (mod && e.code === 'KeyS') { e.preventDefault(); serializer.saveToFile(); }
   else if (mod && e.code === 'KeyO') {
     e.preventDefault();
-    serializer.loadFromFile().then((made) => { if (made) { history.clear(); refreshCamTargets(); } }).catch(() => {});
+    serializer.loadFromFile().then((made) => { if (made) { history.clear(); refreshCamTargets(); refreshControlTargets(); } }).catch(() => {});
   }
 });
 
@@ -472,14 +504,15 @@ window.addEventListener('tiny3:player-loaded', () => {
   document.getElementById('ctl-jump-v').textContent = player.jumpVelocity;
   player.onFire = (p, eng) => {
     if (muteCheck.checked) return;
-    eng.playEntitySounds(p, { trigger: 'fire' });
+    eng.playEntitySounds(controlledEntity(p), { trigger: 'fire' });
   };
   player.onJump = (p, eng) => {
     if (muteCheck.checked) return;
-    eng.playEntitySounds(p, { trigger: 'jump' });
+    eng.playEntitySounds(controlledEntity(p), { trigger: 'jump' });
   };
   renderBindings();
   refreshCamTargets();
+  refreshControlTargets();
 });
 
 // ---- per-frame logic ----
@@ -508,11 +541,19 @@ engine.onUpdate = (dt, eng) => {
 
   // keep the camera-target dropdown in sync with the hierarchy
   if (camTargetSel.options.length !== editor.selectables.length + 1) refreshCamTargets();
+  // keep the player-controls target dropdown in sync and fall back if the target was deleted
+  if (ctlTargetSel.options.length !== editor.selectables.length) {
+    refreshControlTargets();
+  } else if (player.target && !editor.selectables.includes(player.target)) {
+    player.target = null;
+    refreshControlTargets();
+  }
 
   input.endFrame();
 };
 
 refreshCamTargets();
+refreshControlTargets();
 
 // restore the last autosaved scene (if any) so a refresh loses nothing
 (async () => {

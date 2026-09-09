@@ -186,11 +186,15 @@ export class SceneSerializer {
 
   _serializePlayer() {
     const p = this.player;
+    const targetIdx = p.target
+      ? this.editor.selectables.findIndex((e) => e === p.target)
+      : -1;
     return {
       enabled: p.enabled,
       speed: round(p.speed),
       jumpVelocity: round(p.jumpVelocity),
       rotateToMovement: p.rotateToMovement,
+      target: targetIdx,
       controls: JSON.parse(JSON.stringify(p.controls)),
     };
   }
@@ -266,10 +270,22 @@ export class SceneSerializer {
       p.jumpVelocity = d.jumpVelocity ?? p.jumpVelocity;
       p.rotateToMovement = d.rotateToMovement ?? p.rotateToMovement;
       if (d.controls) p.controls = d.controls;
+      // target is resolved after entities are built, below
+      p._pendingTargetIdx = Number.isInteger(d.target) ? d.target : -1;
       // reflect in the controls panel UI if present
       document.getElementById('ctl-enabled')?.dispatchEvent(new Event('sync'));
       window.dispatchEvent(new CustomEvent('tiny3:player-loaded'));
     }
+
+    // resolve player control target now that entities exist
+    const p = this.player;
+    if (Number.isInteger(p._pendingTargetIdx) && p._pendingTargetIdx >= 0 && made[p._pendingTargetIdx]) {
+      p.target = made[p._pendingTargetIdx];
+    } else {
+      p.target = null;
+    }
+    delete p._pendingTargetIdx;
+    window.dispatchEvent(new CustomEvent('tiny3:player-loaded'));
 
     return made;
   }

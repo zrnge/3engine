@@ -51,6 +51,14 @@ export class Player extends Entity {
     // action callbacks — editor/game can hook into fire/jump/etc
     this.onFire = null; // set externally: (player, engine) => {}
     this.onJump = null;
+
+    // target entity that actually moves; defaults to self
+    this.target = null;
+  }
+
+  /** The object3D currently being controlled. */
+  get controlledObject() {
+    return this.target ? this.target.object3D : this.object3D;
   }
 
   /** True if any bound key for an action is currently held. */
@@ -66,7 +74,8 @@ export class Player extends Entity {
   update(dt, engine) {
     if (!this.enabled) return;
     const input = engine.input;
-    const pos = this.object3D.position;
+    const object3D = this.controlledObject;
+    const pos = object3D.position;
     const fpsMode = engine.cameraRig?.mode === 'fps';
 
     let dx = 0, dz = 0;
@@ -91,12 +100,12 @@ export class Player extends Entity {
       this._resolveSolidCollision(engine, pos);
 
       if (!fpsMode && this.rotateToMovement) {
-        this.object3D.rotation.y = Math.atan2(rx, rz);
+        object3D.rotation.y = Math.atan2(rx, rz);
       }
     }
 
     if (fpsMode) {
-      this.object3D.rotation.y = engine.cameraRig.yaw; // body faces look direction
+      object3D.rotation.y = engine.cameraRig.yaw; // body faces look direction
     }
 
     if (this._pressed(input, 'jump') && this.grounded) {
@@ -120,7 +129,8 @@ export class Player extends Entity {
 
   /** Push the player out of any solid entity's world AABB (axis-separated, so we slide). */
   _resolveSolidCollision(engine, pos) {
-    const playerBox = new THREE.Box3().setFromObject(this.object3D);
+    const object3D = this.controlledObject;
+    const playerBox = new THREE.Box3().setFromObject(object3D);
     const playerCenter = new THREE.Vector3();
     const playerSize = new THREE.Vector3();
     playerBox.getCenter(playerCenter);
@@ -128,7 +138,7 @@ export class Player extends Entity {
     const pHalf = playerSize.multiplyScalar(0.5);
 
     for (const entity of engine.entities) {
-      if (!entity || entity === this || !entity.solid) continue;
+      if (!entity || entity === this || entity === this.target || !entity.solid) continue;
       const { center, halfSize } = getWorldHalfSize(entity.object3D);
 
       // only block horizontal movement when vertically overlapping
