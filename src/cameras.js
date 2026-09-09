@@ -45,7 +45,9 @@ export class CameraRig {
     this._last = { x: 0, y: 0 };
 
     domElement.addEventListener('mousedown', (e) => {
-      if (this.mode === 'orbit' && e.button === 0 && this.enabled !== false) {
+      // don't start an orbit-drag when the click is on an editor UI panel
+      const onPanel = e.target && e.target.closest && e.target.closest('.panel');
+      if (this.mode === 'orbit' && e.button === 0 && this.enabled !== false && !onPanel) {
         this._dragging = true;
         this._last.x = e.clientX;
         this._last.y = e.clientY;

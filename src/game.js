@@ -3,6 +3,7 @@ import { Engine } from './engine.js';
 import { CameraRig } from './cameras.js';
 import { AssetLoader } from './loader.js';
 import { ObjectEditor, LightEntity } from './editor.js';
+import { makeDraggable } from './ui.js';
 import { Entity } from './entity.js';
 import { Player } from './player.js';
 import { Coin } from './enemy.js';
@@ -137,6 +138,9 @@ assets.load('./assets/duck.glb', { scale: 0.05, position: [-2, 0, -4], name: 'Du
 
 // debug handle
 window.__engine = engine;
+
+// ---- draggable panels (drag any panel by its header) ----
+document.querySelectorAll('.panel').forEach((p) => makeDraggable(p));
 
 // ---- toolbar wiring ----
 function setCamMode(mode) {

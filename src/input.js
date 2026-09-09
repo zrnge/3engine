@@ -38,6 +38,8 @@ export class Input {
     });
 
     window.addEventListener('mousedown', (e) => {
+      // clicks on editor UI panels must not count as scene clicks
+      if (e.target && e.target.closest && e.target.closest('.panel')) return;
       if (!this._mouseDown.has(e.button)) this._mouseClicked.add(e.button);
       this._mouseDown.add(e.button);
     });
