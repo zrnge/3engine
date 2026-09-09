@@ -9,7 +9,8 @@ import * as THREE from 'three';
  *
  * Modes:
  *   orbit  — drag to orbit a target, wheel to zoom (default)
- *   follow — chase cam behind a target object, wheel to zoom
+ *   follow — chase cam tied to ANY target object; offset/height/lerp/FOV are
+ *            user-adjustable so a model (e.g. the player) can be "attached"
  *   fps    — pointer-lock mouse look at a target's head + WASD (handled by Player)
  *   free   — pointer-lock fly cam: mouse look, WASD + Q/E up/down, Shift = fast
  */
@@ -23,11 +24,18 @@ export class CameraRig {
     this.target = null; // THREE.Object3D for follow/fps/orbit
     this.enabled = true; // editor sets false while a gizmo drag is active
 
-    // orbit / follow state
+    // orbit state
     this.theta = Math.PI * 0.25;
     this.phi = Math.PI / 3.2;
     this.distance = 14;
     this.lookAt = new THREE.Vector3(0, 1, 0);
+
+    // follow-cam settings (all editable from the Camera panel)
+    this.followOffset = 6;    // distance behind the target
+    this.followHeight = 3;    // height above the target
+    this.followLerp = 8;      // smoothing: higher = snappier (1/sec)
+    this.followLookUp = 1;    // look-at height above the target's origin
+    this.rotateWithTarget = true; // camera swings with the target's heading
 
     // fps / free yaw-pitch state
     this.yaw = 0;
@@ -68,6 +76,18 @@ export class CameraRig {
     this._freePos.copy(this.camera.position);
   }
 
+  /** Attach/detach the camera target without changing mode (e.g. pick a model). */
+  setTarget(object3D) { this.target = object3D || null; }
+
+  /** Field of view in degrees (updates the projection matrix). */
+  setFov(deg) {
+    const fov = THREE.MathUtils.clamp(Number(deg) || 60, 20, 120);
+    if (fov !== this.camera.fov) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
   update(dt, input) {
     if (this.enabled === false) return;
     switch (this.mode) {
@@ -92,16 +112,19 @@ export class CameraRig {
 
   _follow(dt, input) {
     if (!this.target) { this._orbit(dt, input); return; }
-    this.distance = THREE.MathUtils.clamp(this.distance + input.wheel * 0.01, 3, 30);
+    this.followOffset = THREE.MathUtils.clamp(
+      this.followOffset + input.wheel * 0.01, 1, 40);
     const t = this.target.position;
-    const heading = this.target.rotation.y;
+    const heading = this.rotateWithTarget ? this.target.rotation.y : this.yaw;
     const desired = new THREE.Vector3(
-      t.x - Math.sin(heading) * this.distance * 0.45,
-      t.y + this.distance * 0.45,
-      t.z - Math.cos(heading) * this.distance * 0.45
+      t.x - Math.sin(heading) * this.followOffset,
+      t.y + this.followHeight,
+      t.z - Math.cos(heading) * this.followOffset
     );
-    this.camera.position.lerp(desired, 1 - Math.pow(0.001, dt)); // smooth chase
-    this.camera.lookAt(t.x, t.y + 1, t.z);
+    // frame-rate independent smoothing; followLerp is "per second"
+    const k = 1 - Math.exp(-this.followLerp * dt);
+    this.camera.position.lerp(desired, k);
+    this.camera.lookAt(t.x, t.y + this.followLookUp, t.z);
   }
 
   _fps(dt, input) {

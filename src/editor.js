@@ -11,6 +11,9 @@ const RAD = Math.PI / 180;
  *   - click an object in the viewport (or hierarchy) to select it
  *   - translate / rotate / scale gizmo (TransformControls), modes G / R / S
  *   - numeric inspector: name, position, rotation (deg), scale — all editable
+ *   - light inspector: color, intensity, cast-shadow (for Light entities)
+ *   - material inspector: color, metalness, roughness, opacity, wireframe,
+ *     texture load / clear (for Mesh entities)
  *   - hierarchy panel listing every registered object; click to select
  *   - delete with Del or the inspector button
  *
@@ -34,6 +37,7 @@ export class ObjectEditor {
     this.selected = null;
     this._raycaster = new THREE.Raycaster();
     this._gizmoMode = 'translate';
+    this._texLoader = new THREE.TextureLoader();
 
     // --- transform gizmo ---
     this.gizmo = new TransformControls(engine.camera, engine.renderer.domElement);
@@ -100,7 +104,9 @@ export class ObjectEditor {
     // click to select (only when the gizmo isn't being dragged)
     if (input.mouseClicked(0) && !this.gizmo.dragging) {
       this._raycaster.setFromCamera(input.mouseNDC, camera);
-      const roots = this.selectables.map((e) => e.object3D);
+      const roots = this.selectables
+        .filter((e) => !e.object3D.isLight) // lights are selected via the hierarchy
+        .map((e) => e.object3D);
       const hit = this._raycaster.intersectObjects(roots, true)[0];
       if (hit) {
         const entity = this.selectables.find((e) => {
@@ -114,8 +120,8 @@ export class ObjectEditor {
       }
     }
 
-    // gizmo mode hotkeys — but not while typing in an inspector field
-    if (!this._typingInInspector()) {
+    // gizmo mode hotkeys — but not while typing in a panel field
+    if (!this._typingInPanel()) {
       if (input.wasPressed('KeyG')) this.setGizmoMode('translate');
       if (input.wasPressed('KeyR')) this.setGizmoMode('rotate');
       if (input.wasPressed('KeyS')) this.setGizmoMode('scale');
@@ -123,7 +129,7 @@ export class ObjectEditor {
 
     // delete selection
     const sel = this.selected;
-    if (sel && (input.wasPressed('Delete') || input.wasPressed('Backspace')) && !this._typingInInspector()) {
+    if (sel && (input.wasPressed('Delete') || input.wasPressed('Backspace')) && !this._typingInPanel()) {
       this.deleteSelected();
       return;
     }
@@ -166,6 +172,7 @@ export class ObjectEditor {
       case 'Player': return '●';
       case 'Coin': return '◉';
       case 'Prop': return '■';
+      case 'Light': return '☀';
       default: return '◆';
     }
   }
@@ -185,12 +192,17 @@ export class ObjectEditor {
     }
 
     const o = sel.object3D;
+    const isLight = !!o.isLight;
+    const mesh = this._firstMesh(o);
+
     this.inspectorEl.innerHTML = `
       <div class="body">
         <input class="obj-name" id="insp-name" value="${this._name(sel)}" spellcheck="false" />
         ${this._vecRow('pos', 'Position', o.position)}
         ${this._vecRow('rot', 'Rotation°', { x: o.rotation.x * DEG, y: o.rotation.y * DEG, z: o.rotation.z * DEG })}
-        ${this._vecRow('scl', 'Scale', o.scale)}
+        ${isLight ? '' : this._vecRow('scl', 'Scale', o.scale)}
+        ${isLight ? this._lightSection(o) : ''}
+        ${mesh ? this._materialSection(mesh) : ''}
         <div class="insp-row">
           <button class="tbtn" id="insp-dup">Duplicate</button>
           <button class="tbtn danger" id="insp-del">Delete</button>
@@ -204,11 +216,12 @@ export class ObjectEditor {
     });
 
     // numeric vectors
-    for (const [key, target, conv] of [
+    const vecs = [
       ['pos', o.position, 1],
       ['rot', o.rotation, RAD],
-      ['scl', o.scale, 1],
-    ]) {
+    ];
+    if (!isLight) vecs.push(['scl', o.scale, 1]);
+    for (const [key, target, conv] of vecs) {
       for (const axis of ['x', 'y', 'z']) {
         const field = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
         field.addEventListener('input', () => {
@@ -222,12 +235,16 @@ export class ObjectEditor {
       }
     }
 
+    if (isLight) this._wireLightSection(o);
+    if (mesh) this._wireMaterialSection(mesh);
+
     this.inspectorEl.querySelector('#insp-del').addEventListener('click', () => this.deleteSelected());
     this.inspectorEl.querySelector('#insp-dup').addEventListener('click', () => {
       const clone = o.clone(true);
       clone.position.x += 1.5;
       clone.name = (o.name || 'Object') + ' copy';
       const entity = { object3D: clone };
+      entity.object3D.userData.kind = o.userData.kind;
       this.engine.add(entity);
       this.register(entity);
       this.select(entity);
@@ -245,10 +262,130 @@ export class ObjectEditor {
       </div>`;
   }
 
+  // ---------- lights ----------
+
+  _lightSection(light) {
+    const shadowRow = light.shadow
+      ? `<label class="check-row"><input type="checkbox" id="insp-shadow" ${light.castShadow ? 'checked' : ''}/> Cast shadows</label>`
+      : '';
+    return `
+      <h4 class="insp-h">Light</h4>
+      <div class="prop-row"><label>Color</label>
+        <input type="color" id="insp-lcolor" value="#${light.color.getHexString()}" /></div>
+      <div class="prop-row"><label>Intensity</label>
+        <input type="range" id="insp-lintensity" min="0" max="8" step="0.05" value="${light.intensity}" />
+        <span class="val" id="insp-lintensity-v">${light.intensity.toFixed(2)}</span></div>
+      ${shadowRow}`;
+  }
+
+  _wireLightSection(light) {
+    this.inspectorEl.querySelector('#insp-lcolor').addEventListener('input', (e) => {
+      light.color.set(e.target.value);
+    });
+    const slider = this.inspectorEl.querySelector('#insp-lintensity');
+    slider.addEventListener('input', () => {
+      light.intensity = parseFloat(slider.value);
+      this.inspectorEl.querySelector('#insp-lintensity-v').textContent = light.intensity.toFixed(2);
+    });
+    const shadow = this.inspectorEl.querySelector('#insp-shadow');
+    if (shadow) shadow.addEventListener('change', () => { light.castShadow = shadow.checked; });
+  }
+
+  // ---------- materials & textures ----------
+
+  _firstMesh(root) {
+    if (root.isMesh) return root;
+    let found = null;
+    root.traverse?.((n) => { if (!found && n.isMesh) found = n; });
+    return found;
+  }
+
+  _materialSection(mesh) {
+    const m = mesh.material;
+    if (!m || !m.isMeshStandardMaterial) {
+      return '<h4 class="insp-h">Material</h4><div class="empty">Non-standard material — edit in code.</div>';
+    }
+    const hasTex = !!m.map;
+    return `
+      <h4 class="insp-h">Material</h4>
+      <div class="prop-row"><label>Color</label>
+        <input type="color" id="insp-mcolor" value="#${m.color.getHexString()}" /></div>
+      <div class="prop-row"><label>Metalness</label>
+        <input type="range" id="insp-metal" min="0" max="1" step="0.01" value="${m.metalness}" />
+        <span class="val" id="insp-metal-v">${m.metalness.toFixed(2)}</span></div>
+      <div class="prop-row"><label>Roughness</label>
+        <input type="range" id="insp-rough" min="0" max="1" step="0.01" value="${m.roughness}" />
+        <span class="val" id="insp-rough-v">${m.roughness.toFixed(2)}</span></div>
+      <div class="prop-row"><label>Opacity</label>
+        <input type="range" id="insp-opacity" min="0" max="1" step="0.01" value="${m.opacity}" />
+        <span class="val" id="insp-opacity-v">${m.opacity.toFixed(2)}</span></div>
+      <label class="check-row"><input type="checkbox" id="insp-wire" ${m.wireframe ? 'checked' : ''}/> Wireframe</label>
+      <h4 class="insp-h">Texture</h4>
+      <div class="prop-row"><span class="val" id="insp-texname">${hasTex ? (m.map.name || 'custom') : 'none'}</span></div>
+      <div class="insp-row" style="margin-top:4px">
+        <button class="tbtn" id="insp-tex-load">Load…</button>
+        <button class="tbtn" id="insp-tex-clear" ${hasTex ? '' : 'disabled'}>Clear</button>
+      </div>`;
+  }
+
+  _wireMaterialSection(mesh) {
+    const m = mesh.material;
+    if (!m || !m.isMeshStandardMaterial) return;
+    const q = (s) => this.inspectorEl.querySelector(s);
+
+    q('#insp-mcolor').addEventListener('input', (e) => m.color.set(e.target.value));
+
+    const slider = (id, prop, apply) => {
+      const el = q(`#insp-${id}`);
+      el.addEventListener('input', () => {
+        const v = parseFloat(el.value);
+        apply(v);
+        q(`#insp-${id}-v`).textContent = v.toFixed(2);
+      });
+    };
+    slider('metal', 'metalness', (v) => { m.metalness = v; });
+    slider('rough', 'roughness', (v) => { m.roughness = v; });
+    slider('opacity', 'opacity', (v) => {
+      m.opacity = v;
+      m.transparent = v < 1;
+      m.needsUpdate = true;
+    });
+
+    q('#insp-wire').addEventListener('change', (e) => { m.wireframe = e.target.checked; });
+
+    q('#insp-tex-load').addEventListener('click', () => {
+      const picker = document.createElement('input');
+      picker.type = 'file';
+      picker.accept = 'image/*';
+      picker.addEventListener('change', () => {
+        const file = picker.files?.[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        this._texLoader.load(url, (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.name = file.name;
+          if (m.map) m.map.dispose();
+          m.map = tex;
+          m.needsUpdate = true;
+          URL.revokeObjectURL(url);
+          q('#insp-texname').textContent = file.name;
+          q('#insp-tex-clear').disabled = false;
+        });
+      });
+      picker.click();
+    });
+
+    q('#insp-tex-clear').addEventListener('click', () => {
+      if (m.map) { m.map.dispose(); m.map = null; m.needsUpdate = true; }
+      q('#insp-texname').textContent = 'none';
+      q('#insp-tex-clear').disabled = true;
+    });
+  }
+
   /** Refresh inspector numbers without rebuilding the DOM (used while dragging). */
   _syncInspector() {
     const sel = this.selected;
-    if (!sel || !this.inspectorEl || this._typingInInspector()) return;
+    if (!sel || !this.inspectorEl || this._typingInPanel()) return;
     const o = sel.object3D;
     const set = (key, axis, val) => {
       const el = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
@@ -261,10 +398,11 @@ export class ObjectEditor {
     }
   }
 
-  _typingInInspector() {
+  _typingInPanel() {
     const a = document.activeElement;
-    return a && this.inspectorEl && this.inspectorEl.contains(a) &&
-      (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA');
+    if (!a || (a.tagName !== 'INPUT' && a.tagName !== 'TEXTAREA')) return false;
+    // any text/number field in any editor panel counts
+    return !!a.closest('.panel') && a.type !== 'range' && a.type !== 'checkbox' && a.type !== 'color';
   }
 
   _renderStatus() {
@@ -273,4 +411,19 @@ export class ObjectEditor {
     const sel = this.selected ? ` · selected: <b>${this._name(this.selected)}</b>` : '';
     this.statusEl.innerHTML = `${cam} cam · ${this._gizmoMode} gizmo${sel}`;
   }
+}
+
+/**
+ * LightEntity — wraps a THREE.Light so it can live in the engine's entity
+ * list and appear in the hierarchy. Ambient/hemisphere lights have no
+ * position to drag; directional/point/spot do.
+ */
+export class LightEntity {
+  constructor(light, name) {
+    this.object3D = light;
+    light.name = name;
+    light.userData.kind = 'Light';
+  }
+  // lights need no per-frame update; destroy removes them from the scene
+  destroy(engine) { engine.scene.remove(this.object3D); }
 }

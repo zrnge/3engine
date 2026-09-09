@@ -34,6 +34,10 @@
       text-transform: uppercase; color: var(--dim);
       border-bottom: 1px solid var(--border);
     }
+    .panel h4.insp-h {
+      margin: 12px 0 6px; font-size: 11px; font-weight: 600;
+      letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent);
+    }
 
     /* ---- top toolbar ---- */
     #toolbar {
@@ -49,10 +53,11 @@
     }
     .tbtn:hover { background: var(--accent-dim); }
     .tbtn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+    .tbtn:disabled { opacity: 0.4; cursor: default; }
     .tbtn .k { color: var(--dim); font-size: 11px; margin-left: 4px; }
 
     /* ---- hierarchy (left) ---- */
-    #hierarchy { top: 64px; left: 10px; width: 210px; max-height: 55vh; overflow-y: auto; padding-bottom: 6px; z-index: 10; }
+    #hierarchy { top: 64px; left: 10px; width: 210px; max-height: 46vh; overflow-y: auto; padding-bottom: 6px; z-index: 10; }
     #hierarchy .add-row { display: flex; gap: 4px; padding: 8px 10px 4px; flex-wrap: wrap; }
     #hierarchy .add-row .tbtn { border: 1px solid var(--border); padding: 3px 8px; font-size: 12px; }
     #scene-list { list-style: none; margin: 4px 0 0; padding: 0; }
@@ -65,8 +70,12 @@
     #scene-list li .ico { color: var(--dim); font-size: 11px; width: 14px; text-align: center; }
     #scene-list li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+    /* ---- camera panel (left, below hierarchy) ---- */
+    #camera-panel { top: calc(64px + 46vh + 10px); left: 10px; width: 210px; padding-bottom: 10px; z-index: 10; }
+    #camera-panel .body { padding: 8px 12px; }
+
     /* ---- inspector (right) ---- */
-    #inspector { top: 64px; right: 10px; width: 250px; padding-bottom: 10px; max-height: 80vh; overflow-y: auto; z-index: 10; }
+    #inspector { top: 64px; right: 10px; width: 250px; padding-bottom: 10px; max-height: 56vh; overflow-y: auto; z-index: 10; }
     #inspector .body { padding: 8px 12px; }
     #inspector .obj-name {
       width: 100%; margin-bottom: 10px;
@@ -83,7 +92,35 @@
     .insp-row { display: flex; gap: 6px; margin-top: 10px; }
     .insp-row .tbtn { flex: 1; border: 1px solid var(--border); text-align: center; font-size: 12px; }
     .insp-row .tbtn.danger:hover { border-color: #f85149; color: #f85149; }
-    #inspector .empty { padding: 14px 12px; color: var(--dim); }
+    #inspector .empty, #camera-panel .empty, #controls-panel .empty { padding: 4px 0; color: var(--dim); }
+
+    /* ---- property rows (sliders / colors / selects, shared by panels) ---- */
+    .prop-row { display: grid; grid-template-columns: 70px 1fr 34px; gap: 6px; align-items: center; margin-bottom: 6px; }
+    .prop-row label { color: var(--dim); font-size: 12px; }
+    .prop-row input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .prop-row input[type="color"] {
+      width: 42px; height: 24px; padding: 0; border: 1px solid var(--border);
+      border-radius: 4px; background: #0d1117; cursor: pointer;
+    }
+    .prop-row select {
+      grid-column: 2 / 4; width: 100%; background: #0d1117; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font: inherit; font-size: 12px; padding: 3px 5px;
+    }
+    .prop-row .val { color: var(--text); font-size: 11px; text-align: right; }
+    .check-row { display: flex; gap: 6px; align-items: center; color: var(--dim); font-size: 12px; margin: 6px 0; cursor: pointer; }
+    .check-row input { accent-color: var(--accent); }
+
+    /* ---- controls panel (right, below inspector) ---- */
+    #controls-panel { top: calc(64px + 56vh + 10px); right: 10px; width: 250px; padding-bottom: 10px; max-height: 30vh; overflow-y: auto; z-index: 10; }
+    #controls-panel .body { padding: 8px 12px; }
+    .bind-row { display: grid; grid-template-columns: 62px 1fr; gap: 6px; align-items: center; margin-bottom: 5px; }
+    .bind-row label { color: var(--dim); font-size: 12px; text-transform: capitalize; }
+    .bind-btn {
+      border: 1px solid var(--border); background: #0d1117; color: var(--text);
+      font: inherit; font-size: 12px; padding: 3px 8px; border-radius: 4px;
+      cursor: pointer; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    }
+    .bind-btn.listening { border-color: var(--accent); color: var(--accent); }
 
     /* ---- status bar (bottom-left) ---- */
     #status {
@@ -114,7 +151,7 @@
     <button class="tbtn gizmo-btn" data-mode="scale" title="Scale gizmo (S)">⤢ Scale <span class="k">S</span></button>
     <div class="sep"></div>
     <button class="tbtn cam-btn active" data-mode="orbit" title="Orbit camera (1)">Orbit <span class="k">1</span></button>
-    <button class="tbtn cam-btn" data-mode="follow" title="Follow camera (2)">Follow <span class="k">2</span></button>
+    <button class="tbtn cam-btn" data-mode="follow" title="Follow camera — tied to target (2)">Follow <span class="k">2</span></button>
     <button class="tbtn cam-btn" data-mode="free" title="Fly camera (4)">Fly <span class="k">4</span></button>
     <div class="sep"></div>
     <button class="tbtn" id="btn-load-glb" title="Load a .glb model from disk (L)">＋ GLB <span class="k">L</span></button>
@@ -130,13 +167,57 @@
       <button class="tbtn" data-add="cylinder">Cyl</button>
       <button class="tbtn" data-add="torus">Torus</button>
     </div>
+    <div class="add-row">
+      <button class="tbtn" data-light="directional">☀ Dir</button>
+      <button class="tbtn" data-light="point">💡 Point</button>
+      <button class="tbtn" data-light="spot">🔦 Spot</button>
+      <button class="tbtn" data-light="ambient">◌ Amb</button>
+    </div>
     <ul id="scene-list"></ul>
+  </div>
+
+  <!-- camera settings: tie the camera to any object -->
+  <div id="camera-panel" class="panel">
+    <h3>Camera</h3>
+    <div class="body">
+      <div class="prop-row"><label>Target</label><select id="cam-target"></select></div>
+      <div class="prop-row"><label>FOV</label>
+        <input type="range" id="cam-fov" min="30" max="110" step="1" value="60" />
+        <span class="val" id="cam-fov-v">60</span></div>
+      <h4 class="insp-h">Follow / Orbit</h4>
+      <div class="prop-row"><label>Offset</label>
+        <input type="range" id="cam-offset" min="2" max="20" step="0.5" value="6" />
+        <span class="val" id="cam-offset-v">6</span></div>
+      <div class="prop-row"><label>Height</label>
+        <input type="range" id="cam-height" min="0" max="12" step="0.5" value="3" />
+        <span class="val" id="cam-height-v">3</span></div>
+      <div class="prop-row"><label>Smooth</label>
+        <input type="range" id="cam-lerp" min="1" max="20" step="0.5" value="8" />
+        <span class="val" id="cam-lerp-v">8</span></div>
+      <label class="check-row"><input type="checkbox" id="cam-rotate" checked /> Rotate with target</label>
+    </div>
   </div>
 
   <!-- inspector -->
   <div id="inspector" class="panel">
     <h3>Inspector</h3>
     <div id="inspector-body"><div class="empty">Select an object in the scene or hierarchy.</div></div>
+  </div>
+
+  <!-- player control settings -->
+  <div id="controls-panel" class="panel">
+    <h3>Player Controls</h3>
+    <div class="body">
+      <label class="check-row"><input type="checkbox" id="ctl-enabled" checked /> Controls enabled</label>
+      <div class="prop-row"><label>Speed</label>
+        <input type="range" id="ctl-speed" min="1" max="20" step="0.5" value="8" />
+        <span class="val" id="ctl-speed-v">8</span></div>
+      <div class="prop-row"><label>Jump</label>
+        <input type="range" id="ctl-jump" min="2" max="18" step="0.5" value="9" />
+        <span class="val" id="ctl-jump-v">9</span></div>
+      <h4 class="insp-h">Key bindings <span style="color:var(--dim);text-transform:none">(click, then press a key)</span></h4>
+      <div id="bind-list"></div>
+    </div>
   </div>
 
   <!-- status bar -->
