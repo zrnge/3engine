@@ -76,7 +76,7 @@
     #camera-panel .body { padding: 8px 12px; }
 
     /* ---- inspector (right) ---- */
-    #inspector { top: 64px; right: 10px; width: 250px; padding-bottom: 10px; max-height: min(56vh, calc(100vh - 300px)); overflow-y: auto; z-index: 10; }
+    #inspector { top: 64px; right: 10px; width: 250px; padding-bottom: 10px; max-height: min(40vh, calc(100vh - 420px)); overflow-y: auto; z-index: 10; }
     #inspector .body { padding: 8px 12px; }
     #inspector .obj-name {
       width: 100%; margin-bottom: 10px;
@@ -112,7 +112,7 @@
     .check-row input { accent-color: var(--accent); }
 
     /* ---- controls panel (right, below inspector) ---- */
-    #controls-panel { top: calc(64px + min(56vh, calc(100vh - 300px)) + 10px); right: 10px; width: 250px; padding-bottom: 10px; max-height: min(30vh, calc(100vh - 380px)); overflow-y: auto; z-index: 10; }
+    #controls-panel { top: calc(64px + min(40vh, calc(100vh - 420px)) + 10px); right: 10px; width: 250px; padding-bottom: 10px; max-height: min(42vh, calc(100vh - 240px)); overflow-y: auto; z-index: 10; }
     #controls-panel .body { padding: 8px 12px; }
     .bind-row { display: grid; grid-template-columns: 62px 1fr; gap: 6px; align-items: center; margin-bottom: 5px; }
     .bind-row label { color: var(--dim); font-size: 12px; text-transform: capitalize; }
@@ -238,8 +238,16 @@
       <div class="prop-row"><label>Jump</label>
         <input type="range" id="ctl-jump" min="2" max="18" step="0.5" value="9" />
         <span class="val" id="ctl-jump-v">9</span></div>
+      <label class="check-row"><input type="checkbox" id="aud-mute" /> Mute all audio</label>
+      <div class="insp-row" style="margin-top:4px">
+        <button class="tbtn" id="aud-test">Test tone</button>
+        <button class="tbtn" id="aud-stop-test" disabled>Stop test</button>
+      </div>
       <h4 class="insp-h">Key bindings <span style="color:var(--dim);text-transform:none">(click, then press a key)</span></h4>
       <div id="bind-list"></div>
+      <p class="empty" style="font-size:11px;margin-top:8px">
+        <b>Fire</b> plays the sound attached to the Player during Play mode.
+      </p>
     </div>
   </div>
 

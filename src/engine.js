@@ -88,6 +88,23 @@ export class Engine {
     if (ctx.state === 'suspended') ctx.resume();
   }
 
+  /** Play the positional audio attached to an entity (one-shot or restart). */
+  playEntitySound(entity, { loop = null } = {}) {
+    const rec = this.sounds.find((s) => s.entity === entity);
+    if (!rec) return false;
+    this.unlockAudio();
+    if (rec.audio.isPlaying) {
+      if (!rec.loop) rec.audio.stop();
+      else return true; // already looping, leave it
+    }
+    if (loop !== null) {
+      rec.loop = !!loop;
+      rec.audio.setLoop(rec.loop);
+    }
+    rec.audio.play();
+    return true;
+  }
+
   _onResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();

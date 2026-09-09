@@ -51,6 +51,10 @@ const editor = new ObjectEditor(engine, {
 const player = engine.add(new Player());
 player.object3D.userData.kind = 'Player';
 editor.register(player);
+player.onFire = (p, eng) => {
+  if (muteCheck.checked) return;
+  eng.playEntitySound(p, { loop: false });
+};
 rig.setMode('orbit', { target: player.object3D });
 
 // ---- lights are editable objects too ----
@@ -226,9 +230,11 @@ document.getElementById('cam-rotate').addEventListener('change', (e) => {
 });
 
 // ---- player controls panel: rebindable keys + tuning ----
-const BIND_ACTIONS = ['forward', 'back', 'left', 'right', 'jump'];
+const BIND_ACTIONS = ['forward', 'back', 'left', 'right', 'jump', 'fire'];
 const bindList = document.getElementById('bind-list');
 let listeningBtn = null;
+let _testOsc = null;
+let _testGain = null;
 
 function prettyCode(code) {
   if (code.startsWith('Arrow')) return code.slice(5) + ' arrow';
@@ -282,6 +288,49 @@ document.getElementById('ctl-enabled').addEventListener('change', (e) => {
 });
 bindSlider('ctl-speed', (v) => { player.speed = v; });
 bindSlider('ctl-jump', (v) => { player.jumpVelocity = v; });
+
+// mute toggle
+const muteCheck = document.getElementById('aud-mute');
+function refreshMute() {
+  const muted = muteCheck.checked;
+  // Three.js AudioListener exposes the master gain node as `.gain`
+  if (engine.listener.gain) engine.listener.gain.value = muted ? 0 : 1;
+}
+muteCheck.addEventListener('change', refreshMute);
+
+// test tone buttons
+const testBtn = document.getElementById('aud-test');
+const stopTestBtn = document.getElementById('aud-stop-test');
+function stopTestTone() {
+  if (_testOsc) { _testOsc.stop(); _testOsc.disconnect(); _testOsc = null; }
+  if (_testGain) { _testGain.disconnect(); _testGain = null; }
+  testBtn.disabled = false; stopTestBtn.disabled = true;
+}
+function startTestTone() {
+  engine.unlockAudio();
+  const ctx = engine.listener.context;
+  if (!ctx) return;
+  if (muteCheck.checked) return;
+  _testGain = ctx.createGain();
+  _testGain.gain.value = 0.15;
+  _testGain.connect(ctx.destination);
+  _testOsc = ctx.createOscillator();
+  _testOsc.type = 'sawtooth';
+  _testOsc.frequency.value = 220;
+  _testOsc.connect(_testGain);
+  _testOsc.start();
+  // quick "pew" envelope: ramp frequency down
+  _testOsc.frequency.setValueAtTime(880, ctx.currentTime);
+  _testOsc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.25);
+  _testGain.gain.setValueAtTime(0.15, ctx.currentTime);
+  _testGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+  _testOsc.stop(ctx.currentTime + 0.28);
+  _testOsc.onended = stopTestTone;
+  testBtn.disabled = true; stopTestBtn.disabled = false;
+}
+testBtn.addEventListener('click', startTestTone);
+stopTestBtn.addEventListener('click', stopTestTone);
+
 renderBindings();
 
 // ---- scene save/load + undo/redo ----
@@ -390,6 +439,10 @@ window.addEventListener('tiny3:player-loaded', () => {
   document.getElementById('ctl-speed-v').textContent = player.speed;
   document.getElementById('ctl-jump').value = player.jumpVelocity;
   document.getElementById('ctl-jump-v').textContent = player.jumpVelocity;
+  player.onFire = (p, eng) => {
+    if (muteCheck.checked) return;
+    eng.playEntitySound(p, { loop: false });
+  };
   renderBindings();
   refreshCamTargets();
 });
