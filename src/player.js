@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Entity } from './entity.js';
+import { Entity, getWorldHalfSize } from './entity.js';
 
 const GRAVITY = -24;
 const GROUND_Y = 0.5; // half the cube height
@@ -81,8 +81,15 @@ export class Player extends Entity {
       const rx = dx * Math.cos(yaw) - dz * Math.sin(yaw);
       const rz = dx * Math.sin(yaw) + dz * Math.cos(yaw);
       const len = Math.hypot(rx, rz);
-      pos.x = THREE.MathUtils.clamp(pos.x + (rx / len) * this.speed * dt, -BOUND, BOUND);
-      pos.z = THREE.MathUtils.clamp(pos.z + (rz / len) * this.speed * dt, -BOUND, BOUND);
+      const vx = (rx / len) * this.speed * dt;
+      const vz = (rz / len) * this.speed * dt;
+
+      // try X movement, then Z, sliding along solid walls
+      pos.x = THREE.MathUtils.clamp(pos.x + vx, -BOUND, BOUND);
+      this._resolveSolidCollision(engine, pos);
+      pos.z = THREE.MathUtils.clamp(pos.z + vz, -BOUND, BOUND);
+      this._resolveSolidCollision(engine, pos);
+
       if (!fpsMode && this.rotateToMovement) {
         this.object3D.rotation.y = Math.atan2(rx, rz);
       }
@@ -108,6 +115,37 @@ export class Player extends Entity {
       pos.y = GROUND_Y;
       this.velocityY = 0;
       this.grounded = true;
+    }
+  }
+
+  /** Push the player out of any solid entity's world AABB (axis-separated, so we slide). */
+  _resolveSolidCollision(engine, pos) {
+    const playerBox = new THREE.Box3().setFromObject(this.object3D);
+    const playerCenter = new THREE.Vector3();
+    const playerSize = new THREE.Vector3();
+    playerBox.getCenter(playerCenter);
+    playerBox.getSize(playerSize);
+    const pHalf = playerSize.multiplyScalar(0.5);
+
+    for (const entity of engine.entities) {
+      if (!entity || entity === this || !entity.solid) continue;
+      const { center, halfSize } = getWorldHalfSize(entity.object3D);
+
+      // only block horizontal movement when vertically overlapping
+      const overlapY = pHalf.y + halfSize.y - Math.abs(playerCenter.y - center.y);
+      if (overlapY <= 0) continue;
+
+      const overlapX = pHalf.x + halfSize.x - Math.abs(pos.x - center.x);
+      const overlapZ = pHalf.z + halfSize.z - Math.abs(pos.z - center.z);
+
+      if (overlapX > 0 && overlapZ > 0) {
+        // resolve the smaller axis overlap so we slide along walls
+        if (overlapX < overlapZ) {
+          pos.x = center.x + (pos.x > center.x ? 1 : -1) * (pHalf.x + halfSize.x);
+        } else {
+          pos.z = center.z + (pos.z > center.z ? 1 : -1) * (pHalf.z + halfSize.z);
+        }
+      }
     }
   }
 }

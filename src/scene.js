@@ -121,6 +121,7 @@ export class SceneSerializer {
       position: v3(o.position),
       rotation: v3(o.rotation),
       scale: v3(o.scale),
+      solid: !!entity.solid,
     };
 
     // lights
@@ -280,6 +281,9 @@ export class SceneSerializer {
       if (d.rotation) o.rotation.set(...d.rotation);
       if (d.scale) o.scale.set(...d.scale);
     };
+    const applySolid = (entity) => {
+      if (d.solid !== undefined) entity.solid = !!d.solid;
+    };
 
     switch (d.type) {
       case 'light': {
@@ -291,11 +295,13 @@ export class SceneSerializer {
           this.engine.scene.add(light.target);
         }
         const entity = new LightEntity(light, d.name || 'Light');
+        applySolid(entity);
         await this._attachSounds(entity, d.sounds);
         return entity;
       }
       case 'player': {
         apply(this.player.object3D);
+        applySolid(this.player);
         await this._attachSounds(this.player, d.sounds);
         return this.player;
       }
@@ -303,6 +309,7 @@ export class SceneSerializer {
         const coin = new Coin(d.position?.[0] ?? 0, d.position?.[2] ?? 0);
         apply(coin.object3D);
         coin.object3D.userData.kind = 'Coin';
+        applySolid(coin);
         await this._attachSounds(coin, d.sounds);
         return coin;
       }
@@ -312,6 +319,7 @@ export class SceneSerializer {
         obj.userData.assetUrl = d.assetUrl;
         obj.userData.kind = 'Prop';
         const entity = new Entity(obj);
+        applySolid(entity);
         await this._attachSounds(entity, d.sounds);
         return entity;
       }
@@ -331,6 +339,7 @@ export class SceneSerializer {
         apply(mesh);
         mesh.userData.kind = 'Prop';
         const entity = new Entity(mesh);
+        applySolid(entity);
         await this._attachSounds(entity, d.sounds);
         return entity;
       }

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { Entity } from './entity.js';
 
 const DEG = 180 / Math.PI;
 const RAD = Math.PI / 180;
@@ -287,6 +288,37 @@ export class ObjectEditor {
       this.engine.mixers.splice(mi, 1);
     }
     this._clearSound(entity);
+    this._clearSolidHelper(entity);
+  }
+
+  /** Show/hide a red wireframe box around solid entities. */
+  _updateSolidHelper(entity) {
+    this._clearSolidHelper(entity);
+    if (!entity.solid) return;
+    const helper = new THREE.BoxHelper(entity.object3D, 0xff3333);
+    helper.name = '__solidHelper';
+    entity.object3D.userData.__solidHelper = helper;
+    this.engine.scene.add(helper);
+    helper.update();
+    // keep helper in sync while selected/transformed
+    const tick = () => {
+      if (!helper.parent) return;
+      if (entity.solid && entity.object3D.userData.__solidHelper === helper) {
+        helper.update();
+        requestAnimationFrame(tick);
+      } else {
+        this.engine.scene.remove(helper);
+      }
+    };
+    tick();
+  }
+
+  _clearSolidHelper(entity) {
+    const helper = entity.object3D.userData.__solidHelper;
+    if (helper) {
+      this.engine.scene.remove(helper);
+      delete entity.object3D.userData.__solidHelper;
+    }
   }
 
   // ---------- hierarchy panel ----------
@@ -338,6 +370,7 @@ export class ObjectEditor {
         ${this._vecRow('pos', 'Position', o.position)}
         ${this._vecRow('rot', 'Rotation°', { x: o.rotation.x * DEG, y: o.rotation.y * DEG, z: o.rotation.z * DEG })}
         ${isLight ? '' : this._vecRow('scl', 'Scale', o.scale)}
+        <label class="check-row"><input type="checkbox" id="insp-solid" ${sel.solid ? 'checked' : ''}/> Solid (blocks player)</label>
         ${isLight ? this._lightSection(o) : ''}
         ${mesh ? this._materialSection(mesh) : ''}
         ${this._animationSection(sel)}
@@ -374,6 +407,15 @@ export class ObjectEditor {
       }
     }
 
+    const solidCheck = this.inspectorEl.querySelector('#insp-solid');
+    if (solidCheck) {
+      solidCheck.addEventListener('change', () => {
+        sel.solid = solidCheck.checked;
+        this._updateSolidHelper(sel);
+      });
+    }
+    this._updateSolidHelper(sel);
+
     if (isLight) this._wireLightSection(o);
     if (mesh) this._wireMaterialSection(mesh);
     this._wireAnimationSection(sel);
@@ -384,7 +426,8 @@ export class ObjectEditor {
       const clone = o.clone(true);
       clone.position.x += 1.5;
       clone.name = (o.name || 'Object') + ' copy';
-      const entity = { object3D: clone };
+      const entity = new Entity(clone);
+      entity.solid = sel.solid;
       entity.object3D.userData.kind = o.userData.kind;
       this.engine.add(entity);
       this.register(entity);
