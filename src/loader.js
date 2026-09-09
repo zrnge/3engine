@@ -54,6 +54,8 @@ export class AssetLoader {
     root.scale.set(s[0], s[1], s[2]);
     root.position.set(position[0], position[1], position[2]);
     root.userData.assetUrl = url;
+    // keep the animation clips so the editor can play them
+    root.userData.animations = gltf.animations || [];
     return root;
   }
 

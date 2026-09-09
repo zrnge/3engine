@@ -146,6 +146,11 @@ assets.load('./assets/duck.glb', { scale: 0.05, position: [-2, 0, -4], name: 'Du
 // debug handle
 window.__engine = engine;
 
+// browsers block audio until a user gesture — unlock the AudioContext once
+const _unlock = () => { engine.unlockAudio(); };
+window.addEventListener('pointerdown', _unlock, { once: false });
+window.addEventListener('keydown', _unlock, { once: false });
+
 // ---- draggable panels (drag any panel by its header) ----
 document.querySelectorAll('.panel').forEach((p) => makeDraggable(p));
 

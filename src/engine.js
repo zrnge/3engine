@@ -32,6 +32,14 @@ export class Engine {
     this.paused = false;
     this.time = 0;
 
+    // animation + audio registries (editor features)
+    this.mixers = [];          // { root, mixer, clips, actions, current, speed, loop }
+    this.sounds = [];          // { entity, audio, name, volume, loop, autoplay, refDistance }
+
+    // one shared audio listener attached to the camera
+    this.listener = new THREE.AudioListener();
+    this.camera.add(this.listener);
+
     this._clock = new THREE.Clock();
     this._resizeHandler = () => this._onResize();
     window.addEventListener('resize', this._resizeHandler);
@@ -67,9 +75,17 @@ export class Engine {
       for (const entity of this.entities) {
         if (typeof entity.update === 'function') entity.update(dt, this);
       }
+      // advance animations + fade positional audio
+      for (const m of this.mixers) m.mixer.update(dt * (m.speed ?? 1));
       if (this.onUpdate) this.onUpdate(dt, this);
     }
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Browsers block audio until a user gesture — resume the context on first click/key. */
+  unlockAudio() {
+    const ctx = this.listener.context;
+    if (ctx.state === 'suspended') ctx.resume();
   }
 
   _onResize() {

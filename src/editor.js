@@ -40,6 +40,7 @@ export class ObjectEditor {
     this._gizmoMode = 'translate';
     this.statusPrefix = ''; // e.g. '▶ PLAYING · ' while in play mode
     this._texLoader = new THREE.TextureLoader();
+    this._audioLoader = new THREE.AudioLoader();
     this._dragStart = null; // transform snapshot for undoing gizmo drags
 
     // --- transform gizmo ---
@@ -271,10 +272,21 @@ export class ObjectEditor {
     const entity = this.selected;
     if (!entity) return;
     this.select(null);
+    this._cleanupEntityMedia(entity);
     if (typeof entity.destroy === 'function') entity.destroy(this.engine);
     else this.engine.remove(entity);
     this.unregister(entity);
     this._recordAddRemove(entity, false); // undoable delete
+  }
+
+  /** Stop + drop any animation mixer / positional audio bound to an entity. */
+  _cleanupEntityMedia(entity) {
+    const mi = this.engine.mixers.findIndex((m) => m.root === entity.object3D);
+    if (mi !== -1) {
+      this.engine.mixers[mi].mixer.stopAllAction();
+      this.engine.mixers.splice(mi, 1);
+    }
+    this._clearSound(entity);
   }
 
   // ---------- hierarchy panel ----------
@@ -328,6 +340,8 @@ export class ObjectEditor {
         ${isLight ? '' : this._vecRow('scl', 'Scale', o.scale)}
         ${isLight ? this._lightSection(o) : ''}
         ${mesh ? this._materialSection(mesh) : ''}
+        ${this._animationSection(sel)}
+        ${this._audioSection(sel)}
         <div class="insp-row">
           <button class="tbtn" id="insp-dup">Duplicate</button>
           <button class="tbtn danger" id="insp-del">Delete</button>
@@ -362,6 +376,8 @@ export class ObjectEditor {
 
     if (isLight) this._wireLightSection(o);
     if (mesh) this._wireMaterialSection(mesh);
+    this._wireAnimationSection(sel);
+    this._wireAudioSection(sel);
 
     this.inspectorEl.querySelector('#insp-del').addEventListener('click', () => this.deleteSelected());
     this.inspectorEl.querySelector('#insp-dup').addEventListener('click', () => {
@@ -506,6 +522,191 @@ export class ObjectEditor {
       q('#insp-texname').textContent = 'none';
       q('#insp-tex-clear').disabled = true;
     });
+  }
+
+  // ---------- animation ----------
+
+  /** Get (or lazily create) the mixer record for an entity. */
+  _mixerFor(entity) {
+    let rec = this.engine.mixers.find((m) => m.root === entity.object3D);
+    if (!rec) {
+      const clips = entity.object3D.userData.animations || [];
+      rec = {
+        root: entity.object3D,
+        mixer: new THREE.AnimationMixer(entity.object3D),
+        clips,
+        actions: {},
+        current: null,
+        speed: 1,
+        loop: true,
+      };
+      this.engine.mixers.push(rec);
+    }
+    return rec;
+  }
+
+  _animationSection(entity) {
+    const clips = entity.object3D.userData.animations || [];
+    if (!clips.length) return '';
+    const rec = this.engine.mixers.find((m) => m.root === entity.object3D);
+    const cur = rec?.current ?? '';
+    const opts = ['<option value="">(none)</option>']
+      .concat(clips.map((c, i) =>
+        `<option value="${i}" ${String(i) === String(cur) ? 'selected' : ''}>${c.name || 'clip ' + i}</option>`))
+      .join('');
+    return `
+      <h4 class="insp-h">Animation</h4>
+      <div class="prop-row"><label>Clip</label><select id="insp-anim">${opts}</select></div>
+      <div class="prop-row"><label>Speed</label>
+        <input type="range" id="insp-anim-speed" min="0" max="3" step="0.05" value="${rec?.speed ?? 1}" />
+        <span class="val" id="insp-anim-speed-v">${(rec?.speed ?? 1).toFixed(2)}</span></div>
+      <label class="check-row"><input type="checkbox" id="insp-anim-loop" ${rec?.loop !== false ? 'checked' : ''}/> Loop</label>`;
+  }
+
+  _wireAnimationSection(entity) {
+    const sel = this.inspectorEl.querySelector('#insp-anim');
+    if (!sel) return; // no animations on this object
+    const rec = this._mixerFor(entity);
+    const q = (s) => this.inspectorEl.querySelector(s);
+
+    const play = (idx) => {
+      // stop current
+      if (rec.current !== null && rec.actions[rec.current]) {
+        rec.actions[rec.current].fadeOut(0.15);
+      }
+      if (idx === '' || idx === null) { rec.current = null; return; }
+      const i = Number(idx);
+      let action = rec.actions[i];
+      if (!action) {
+        action = rec.mixer.clipAction(rec.clips[i]);
+        rec.actions[i] = action;
+      }
+      action.reset();
+      action.setLoop(rec.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+      action.clampWhenFinished = !rec.loop;
+      action.fadeIn(0.15).play();
+      rec.current = i;
+    };
+
+    sel.addEventListener('change', () => play(sel.value));
+
+    const speed = q('#insp-anim-speed');
+    speed.addEventListener('input', () => {
+      rec.speed = parseFloat(speed.value);
+      q('#insp-anim-speed-v').textContent = rec.speed.toFixed(2);
+    });
+
+    q('#insp-anim-loop').addEventListener('change', (e) => {
+      rec.loop = e.target.checked;
+      const a = rec.current !== null ? rec.actions[rec.current] : null;
+      if (a) {
+        a.setLoop(rec.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+        a.clampWhenFinished = !rec.loop;
+      }
+    });
+  }
+
+  // ---------- audio ----------
+
+  _audioSection(entity) {
+    const rec = this.engine.sounds.find((s) => s.entity === entity);
+    return `
+      <h4 class="insp-h">Audio</h4>
+      <div class="prop-row"><span class="val" id="insp-audname">${rec ? rec.name : 'none'}</span></div>
+      <div class="insp-row" style="margin-top:4px">
+        <button class="tbtn" id="insp-aud-load">Load…</button>
+        <button class="tbtn" id="insp-aud-play" ${rec ? '' : 'disabled'}>${rec && rec.audio.isPlaying ? '⏸ Stop' : '▶ Play'}</button>
+        <button class="tbtn" id="insp-aud-clear" ${rec ? '' : 'disabled'}>Clear</button>
+      </div>
+      <div class="prop-row"><label>Volume</label>
+        <input type="range" id="insp-aud-vol" min="0" max="1" step="0.01" value="${rec ? rec.volume : 0.8}" ${rec ? '' : 'disabled'} />
+        <span class="val" id="insp-aud-vol-v">${(rec ? rec.volume : 0.8).toFixed(2)}</span></div>
+      <div class="prop-row"><label>Dist</label>
+        <input type="range" id="insp-aud-dist" min="1" max="50" step="1" value="${rec ? rec.refDistance : 5}" ${rec ? '' : 'disabled'} />
+        <span class="val" id="insp-aud-dist-v">${rec ? rec.refDistance : 5}</span></div>
+      <label class="check-row"><input type="checkbox" id="insp-aud-loop" ${rec?.loop ? 'checked' : ''} ${rec ? '' : 'disabled'}/> Loop</label>
+      <label class="check-row"><input type="checkbox" id="insp-aud-auto" ${rec?.autoplay ? 'checked' : ''} ${rec ? '' : 'disabled'}/> Autoplay</label>`;
+  }
+
+  _wireAudioSection(entity) {
+    const q = (s) => this.inspectorEl.querySelector(s);
+    const rec = () => this.engine.sounds.find((s) => s.entity === entity);
+
+    q('#insp-aud-load').addEventListener('click', () => {
+      const picker = document.createElement('input');
+      picker.type = 'file';
+      picker.accept = 'audio/*';
+      picker.addEventListener('change', () => {
+        const file = picker.files?.[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        this._audioLoader.load(url, (buffer) => {
+          URL.revokeObjectURL(url);
+          // remove any existing sound on this entity
+          this._clearSound(entity);
+          const audio = new THREE.PositionalAudio(this.engine.listener);
+          audio.setBuffer(buffer);
+          audio.setRefDistance(5);
+          entity.object3D.add(audio);
+          this.engine.sounds.push({
+            entity, audio, name: file.name,
+            volume: 0.8, loop: false, autoplay: false, refDistance: 5,
+          });
+          this._renderInspector(); // rebuild to enable the controls
+        });
+      });
+      picker.click();
+    });
+
+    q('#insp-aud-play').addEventListener('click', () => {
+      const r = rec();
+      if (!r) return;
+      this.engine.unlockAudio();
+      if (r.audio.isPlaying) r.audio.stop(); else r.audio.play();
+      this._renderInspector();
+    });
+
+    q('#insp-aud-clear').addEventListener('click', () => {
+      this._clearSound(entity);
+      this._renderInspector();
+    });
+
+    const vol = q('#insp-aud-vol');
+    vol.addEventListener('input', () => {
+      const r = rec(); if (!r) return;
+      r.volume = parseFloat(vol.value);
+      r.audio.setVolume(r.volume);
+      q('#insp-aud-vol-v').textContent = r.volume.toFixed(2);
+    });
+
+    const dist = q('#insp-aud-dist');
+    dist.addEventListener('input', () => {
+      const r = rec(); if (!r) return;
+      r.refDistance = parseInt(dist.value, 10);
+      r.audio.setRefDistance(r.refDistance);
+      q('#insp-aud-dist-v').textContent = String(r.refDistance);
+    });
+
+    q('#insp-aud-loop').addEventListener('change', (e) => {
+      const r = rec(); if (!r) return;
+      r.loop = e.target.checked;
+      r.audio.setLoop(r.loop);
+    });
+
+    q('#insp-aud-auto').addEventListener('change', (e) => {
+      const r = rec(); if (!r) return;
+      r.autoplay = e.target.checked;
+    });
+  }
+
+  _clearSound(entity) {
+    const i = this.engine.sounds.findIndex((s) => s.entity === entity);
+    if (i === -1) return;
+    const r = this.engine.sounds[i];
+    if (r.audio.isPlaying) r.audio.stop();
+    entity.object3D.remove(r.audio);
+    r.audio.disconnect?.();
+    this.engine.sounds.splice(i, 1);
   }
 
   /** Refresh inspector numbers without rebuilding the DOM (used while dragging). */
