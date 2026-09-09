@@ -3,28 +3,44 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tiny3 Engine — Cube Runner Demo</title>
+  <title>Tiny3 Engine — Sandbox</title>
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0e14; }
     canvas { display: block; }
-    #hud {
-      position: fixed; top: 12px; left: 12px;
-      color: #e6edf3; font-family: system-ui, sans-serif; font-size: 14px;
-      background: rgba(13, 17, 23, 0.7); padding: 10px 14px; border-radius: 8px;
-      pointer-events: none; user-select: none; line-height: 1.5;
+    .panel {
+      position: fixed;
+      color: #e6edf3; font-family: system-ui, sans-serif; font-size: 13px;
+      background: rgba(13, 17, 23, 0.78); padding: 10px 14px; border-radius: 8px;
+      user-select: none; line-height: 1.55;
     }
-    #hud b { color: #4dd0a6; }
+    #hud  { top: 12px; left: 12px; pointer-events: none; max-width: 340px; }
+    #info { top: 12px; right: 12px; pointer-events: none; min-width: 190px; }
+    .panel b { color: #4dd0a6; }
+    .panel .k {
+      display: inline-block; background: #21262d; border: 1px solid #30363d;
+      border-radius: 4px; padding: 0 5px; font-size: 12px; color: #e6edf3;
+    }
+    #info .dim { color: #8b949e; }
   </style>
   <script type="importmap">
-    { "imports": { "three": "./lib/three.module.js" } }
+    {
+      "imports": {
+        "three": "./lib/three.module.js",
+        "three/addons/loaders/GLTFLoader.js": "./lib/GLTFLoader.js",
+        "../utils/BufferGeometryUtils.js": "./lib/utils/BufferGeometryUtils.js"
+      }
+    }
   </script>
 </head>
 <body>
-  <div id="hud">
-    <b>Tiny3 Engine</b> — Cube Runner<br />
-    Score: <span id="score">0</span> &nbsp;|&nbsp; Lives: <span id="lives">3</span><br />
-    Move: <b>WASD / Arrows</b> &nbsp; Jump: <b>Space</b> &nbsp; Pause: <b>P</b>
+  <div id="hud" class="panel">
+    <b>Tiny3 Engine</b> — sandbox<br />
+    Camera: <span class="k">1</span> orbit <span class="k">2</span> follow <span class="k">3</span> FPS <span class="k">4</span> free<br />
+    Move: <span class="k">WASD</span> &nbsp; Jump: <span class="k">Space</span> &nbsp; Pause: <span class="k">P</span><br />
+    Editor: <span class="k">click</span> select &nbsp; <span class="k">R</span> rotate &nbsp; <span class="k">[ ]</span> scale<br />
+    <span class="k">L</span> load GLB &nbsp; <span class="k">Del</span> remove &nbsp; <span class="k">Esc</span> deselect / release mouse
   </div>
+  <div id="info" class="panel"><span class="dim">(nothing selected)</span></div>
   <script type="module" src="./src/game.js"></script>
 </body>
 </html>

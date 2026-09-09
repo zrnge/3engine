@@ -1,55 +1,66 @@
-# Tiny3 — a tiny Three.js game engine
+# Tiny3
 
-A minimal, dependency-light game engine built on [Three.js](https://threejs.org), plus a demo game (**Cube Runner**) that shows how to use it. Pure static files — no build step — so it deploys to GitHub Pages as-is.
+A minimal game engine built on [Three.js](https://threejs.org) — game loop, input,
+entities, camera rig, GLB asset loading and a built-in object editor — plus a
+small playable sandbox. No build step, no dependencies to install: everything is
+vendored in `lib/`, perfect for GitHub Pages.
 
-## Demo game: Cube Runner
+## Run locally
 
-- **Move:** WASD or arrow keys
-- **Jump:** Space
-- **Pause:** P
-- Collect gold coins for points, dodge the red chasers. Three hits and the game resets.
+```sh
+python -m http.server 8000
+# open http://localhost:8000
+```
+
+(Any static file server works — ES modules just can't load from `file://`.)
+
+## Controls
+
+| Input | Action |
+|---|---|
+| `WASD` / arrows | Move player |
+| `Space` | Jump |
+| `1` `2` `3` `4` | Camera: orbit · follow · FPS · free-fly |
+| Mouse drag (orbit) / wheel | Orbit / zoom |
+| Click object | Select it |
+| Drag selected | Move it on the ground plane |
+| `R` (+`Shift`) | Rotate selected ±15° |
+| `[` `]` | Scale selected down / up |
+| `Delete` | Remove selected |
+| `L` | Load a `.glb` / `.gltf` model from disk into the scene |
+| `P` / `Esc` | Pause / deselect & release pointer |
 
 ## Engine API
 
 ```js
 import { Engine } from './src/engine.js';
-import { Player } from './src/player.js';
 
-const engine = new Engine({ background: 0x0b0e14 });
-engine.add(new Player());            // any entity with object3D + update(dt, engine)
-engine.onUpdate = (dt, eng) => {};   // per-frame game logic
+const engine = new Engine();
+engine.add(myEntity);          // { object3D, update(dt, engine) }
+engine.onUpdate = (dt) => {};  // per-frame hook
 engine.start();
 ```
 
-| Module | Purpose |
-|---|---|
-| `src/engine.js` | Renderer, scene, camera, fixed-clamped game loop, entity registry, pause (P), auto-resize |
-| `src/input.js` | Keyboard state: `isDown(code)` (held) and `wasPressed(code)` (edge) |
-| `src/entity.js` | `Entity` base class + `aabbCollides()` collision helper |
-| `src/player.js` | Example player controller (move, jump, gravity) |
-| `src/enemy.js` | Example entities: collectible `Coin`, homing `Enemy` |
-
-## Run locally
-
-Any static file server works (ES modules need `http://`, not `file://`):
-
-```sh
-python -m http.server 8000
-# then open http://localhost:8000
-```
+- **`src/engine.js`** — renderer, scene, fixed-clamp game loop, entity registry
+- **`src/input.js`** — keyboard, mouse buttons/position/NDC, wheel, pointer lock
+- **`src/cameras.js`** — `CameraRig` with orbit / follow / FPS / free modes
+- **`src/loader.js`** — `AssetLoader.load(url)` for GLB/GLTF models (with caching & cloning)
+- **`src/editor.js`** — `ObjectEditor`: click-select, drag-move, rotate, scale, delete
+- **`src/entity.js`** — `Entity` base class + `aabbCollides` helper
+- **`src/player.js`**, **`src/enemy.js`** — sample game objects
 
 ## Deploy to GitHub Pages
 
 1. Create a repo on GitHub, then push:
    ```sh
-   git init
-   git add .
-   git commit -m "Tiny3 engine + Cube Runner demo"
-   git branch -M main
    git remote add origin https://github.com/<you>/<repo>.git
    git push -u origin main
    ```
-2. In the repo: **Settings → Pages → Source: Deploy from a branch**, pick `main` / `/ (root)`, save.
-3. Your game appears at `https://<you>.github.io/<repo>/` within a minute or two.
+2. Repo **Settings → Pages → Source: Deploy from a branch → `main` / `/ (root)`**.
+3. Visit `https://<you>.github.io/<repo>/`. The `.nojekyll` file keeps Pages from
+   processing the vendored Three.js files.
 
-Three.js is vendored in `lib/`, so the site works fully offline of CDNs.
+## Credits
+
+`assets/duck.glb` is the Khronos Group sample Duck model (CC-BY 4.0).
+Three.js r160 is vendored under `lib/` (MIT).

@@ -1,99 +1,104 @@
 import * as THREE from 'three';
 import { Engine } from './engine.js';
-import { aabbCollides } from './entity.js';
+import { CameraRig } from './cameras.js';
+import { AssetLoader } from './loader.js';
+import { ObjectEditor } from './editor.js';
+import { Entity } from './entity.js';
 import { Player } from './player.js';
-import { Coin, Enemy } from './enemy.js';
+import { Coin } from './enemy.js';
 
-// ---- setup ----
-const engine = new Engine();
-const { scene } = engine;
+// ---- engine ----
+const engine = new Engine({ background: 0x0b0e14 });
+const { scene, input } = engine;
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+// ---- lights & ground ----
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-sun.position.set(5, 10, 7);
+sun.position.set(6, 12, 8);
 scene.add(sun);
 
 const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(20, 20),
+  new THREE.PlaneGeometry(30, 30),
   new THREE.MeshStandardMaterial({ color: 0x1a2233 })
 );
 ground.rotation.x = -Math.PI / 2;
 scene.add(ground);
-scene.add(new THREE.GridHelper(20, 20, 0x2b3a55, 0x22304a));
+scene.add(new THREE.GridHelper(30, 30, 0x2b3a55, 0x22304a));
 
+// ---- camera rig: 1 orbit · 2 follow · 3 fps · 4 free ----
+const rig = new CameraRig(engine.camera, engine.renderer.domElement);
+engine.cameraRig = rig;
+
+// ---- editor: click-select, drag to move, R rotate, [ ] scale, Del delete ----
+const editor = new ObjectEditor(engine, document.getElementById('info'));
+
+// ---- player ----
 const player = engine.add(new Player());
+rig.setMode('orbit', { target: player.object3D });
 
-// ---- game state ----
-let score = 0;
-let lives = 3;
-let invincibleUntil = 0;
-const scoreEl = document.getElementById('score');
-const livesEl = document.getElementById('lives');
+// ---- starter objects ----
+const assets = new AssetLoader();
+
+class Prop extends Entity {
+  constructor(object3D) {
+    super(object3D);
+    this.halfSize = new THREE.Vector3(0.5, 0.5, 0.5);
+  }
+}
+
+function addProp(object3D, name) {
+  object3D.name = name;
+  return editor.register(engine.add(new Prop(object3D)));
+}
+
+// a few primitives to play with
+const box = new THREE.Mesh(
+  new THREE.BoxGeometry(1.5, 1.5, 1.5),
+  new THREE.MeshStandardMaterial({ color: 0x539bf5 })
+);
+box.position.set(4, 0.75, -3);
+addProp(box, 'Blue Box');
+
+const cone = new THREE.Mesh(
+  new THREE.ConeGeometry(0.9, 2, 24),
+  new THREE.MeshStandardMaterial({ color: 0xf6a435 })
+);
+cone.position.set(-4, 1, 2);
+addProp(cone, 'Cone');
 
 const coins = [];
-function spawnCoin() {
+for (let i = 0; i < 4; i++) {
   const [x, z] = Coin.randomPosition();
-  coins.push(engine.add(new Coin(x, z)));
+  coins.push(editor.register(engine.add(new Coin(x, z))));
 }
-for (let i = 0; i < 5; i++) spawnCoin();
 
-const enemies = [];
-let enemyTimer = 0;
-const ENEMY_INTERVAL = 4; // seconds between spawns
+// sample GLB model (Khronos Duck, CC-BY) — replace with your own in /assets
+assets.load('./assets/duck.glb', { scale: 0.05, position: [-2, 0, -4], name: 'Duck' })
+  .then((duck) => addProp(duck, 'Duck'))
+  .catch((err) => console.warn('[Tiny3] duck.glb failed to load:', err));
 
-// ---- per-frame game logic ----
+// debug handle
+window.__engine = engine;
+
+// ---- per-frame logic ----
 engine.onUpdate = (dt, eng) => {
-  // coin pickup
-  for (let i = coins.length - 1; i >= 0; i--) {
-    const coin = coins[i];
-    if (aabbCollides(player.object3D, player.halfSize, coin.object3D, coin.halfSize)) {
-      coin.destroy(eng);
-      coins.splice(i, 1);
-      score += 1;
-      scoreEl.textContent = score;
-      spawnCoin();
-    }
+  // camera switching
+  if (input.wasPressed('Digit1')) { rig.setMode('orbit', { target: player.object3D }); input.exitPointerLock(); }
+  if (input.wasPressed('Digit2')) { rig.setMode('follow', { target: player.object3D }); input.exitPointerLock(); }
+  if (input.wasPressed('Digit3')) { rig.setMode('fps', { target: player.object3D }); input.requestPointerLock(); }
+  if (input.wasPressed('Digit4')) { rig.setMode('free'); input.requestPointerLock(); }
+
+  // L — load a GLB model from disk and place it in the scene
+  if (input.wasPressed('KeyL')) {
+    assets.pickAndLoad({ position: [0, 0, 0] }).then((obj) => {
+      if (obj) addProp(obj, obj.name);
+    });
   }
 
-  // enemy spawning + collision
-  enemyTimer += dt;
-  if (enemyTimer >= ENEMY_INTERVAL) {
-    enemyTimer = 0;
-    enemies.push(eng.add(new Enemy(player)));
-  }
+  rig.update(dt, input);
+  editor.update(dt);
 
-  const now = performance.now() / 1000;
-  for (let i = enemies.length - 1; i >= 0; i--) {
-    const enemy = enemies[i];
-    if (
-      now > invincibleUntil &&
-      aabbCollides(player.object3D, player.halfSize, enemy.object3D, enemy.halfSize)
-    ) {
-      enemy.destroy(eng);
-      enemies.splice(i, 1);
-      lives -= 1;
-      livesEl.textContent = lives;
-      invincibleUntil = now + 1.5; // brief grace period
-      if (lives <= 0) resetGame();
-    }
-  }
-
-  // flash player while invincible
-  player.object3D.material.opacity = now > invincibleUntil ? 1 : 0.4 + 0.3 * Math.sin(now * 20);
-  player.object3D.material.transparent = true;
-
-  eng.input.endFrame();
+  input.endFrame();
 };
-
-function resetGame() {
-  score = 0;
-  lives = 3;
-  scoreEl.textContent = score;
-  livesEl.textContent = lives;
-  for (const e of enemies) e.destroy(engine);
-  enemies.length = 0;
-  player.object3D.position.set(0, 0.5, 0);
-  invincibleUntil = performance.now() / 1000 + 2;
-}
 
 engine.start();
