@@ -52,6 +52,8 @@ export class ObjectEditor {
     this._helper = new THREE.BoxHelper(new THREE.Object3D(), 0x4dd0a6);
     this._helper.visible = false;
     engine.scene.add(this._helper);
+    // dedicated helper for lights (icon + cone/sphere instead of a bare box)
+    this._lightHelper = null;
   }
 
   // ---------- registry ----------
@@ -75,10 +77,16 @@ export class ObjectEditor {
 
   select(entity) {
     this.selected = entity;
+    this._clearLightHelper();
     if (entity) {
       this.gizmo.attach(entity.object3D);
-      this._helper.visible = true;
-      this._helper.setFromObject(entity.object3D);
+      if (entity.object3D.isLight) {
+        this._helper.visible = false;
+        this._makeLightHelper(entity.object3D);
+      } else {
+        this._helper.visible = true;
+        this._helper.setFromObject(entity.object3D);
+      }
     } else {
       this.gizmo.detach();
       this._helper.visible = false;
@@ -87,11 +95,60 @@ export class ObjectEditor {
     this._renderInspector();
   }
 
+  _clearLightHelper() {
+    if (this._lightHelper) {
+      this.engine.scene.remove(this._lightHelper);
+      this._lightHelper.dispose?.();
+      this._lightHelper = null;
+    }
+  }
+
+  /** Build a small, readable helper for a light: a colored icon sphere + direction cone. */
+  _makeLightHelper(light) {
+    const group = new THREE.Group();
+    group.name = '__lightHelper';
+    const color = light.color ? light.color.getHex() : 0xffffff;
+
+    if (light.isDirectionalLight || light.isSpotLight) {
+      // direction cone pointing from the light toward its target
+      const cone = new THREE.Mesh(
+        new THREE.ConeGeometry(0.25, 0.6, 12),
+        new THREE.MeshBasicMaterial({ color, wireframe: true })
+      );
+      cone.position.set(0, -0.4, 0);
+      cone.rotation.x = Math.PI; // point down the -Y axis (toward target)
+      group.add(cone);
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.06, 0.8, 8),
+        new THREE.MeshBasicMaterial({ color, wireframe: true })
+      );
+      shaft.position.set(0, 0.3, 0);
+      group.add(shaft);
+    } else {
+      // point / ambient: a small glowing sphere
+      const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.3, 16, 12),
+        new THREE.MeshBasicMaterial({ color, wireframe: true })
+      );
+      group.add(sphere);
+    }
+
+    group.position.copy(light.position);
+    // orient directional/spot cones toward their target if one exists
+    if ((light.isDirectionalLight || light.isSpotLight) && light.target) {
+      group.lookAt(light.target.position);
+    }
+    this._lightHelper = group;
+    this.engine.scene.add(group);
+  }
+
   setGizmoMode(mode) {
     if (!['translate', 'rotate', 'scale'].includes(mode)) return;
     this._gizmoMode = mode;
     this.gizmo.setMode(mode);
     if (typeof this.onModeChange === 'function') this.onModeChange(mode);
+    // refresh immediately so the toolbar/status update even if the next frame is delayed
+    this._renderStatus();
   }
 
   get gizmoMode() { return this._gizmoMode; }
