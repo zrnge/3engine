@@ -10,6 +10,7 @@ import { Entity } from './entity.js';
 import { Player } from './player.js';
 import { Coin } from './enemy.js';
 import { RigidBody } from './physics.js';
+import { GameExporter } from './export.js';
 
 // ---- engine ----
 const engine = new Engine({ background: 0x0b0e14 });
@@ -522,6 +523,8 @@ redoBtn.addEventListener('click', () => history.redo());
 document.getElementById('btn-copy').addEventListener('click', () => editor.copySelection());
 document.getElementById('btn-paste').addEventListener('click', () => editor.pasteSelection());
 document.getElementById('btn-save').addEventListener('click', () => serializer.saveToFile());
+const exporter = new GameExporter(serializer);
+document.getElementById('btn-export')?.addEventListener('click', () => exporter.exportToFile());
 document.getElementById('btn-load').addEventListener('click', () => {
   serializer.loadFromFile().then((made) => {
     if (made) { history.clear(); refreshCamTargets(); refreshControlTargets(); }
@@ -605,7 +608,7 @@ function markDirty() {
 document.addEventListener('input', () => markDirty(), true);
 
 // debug/test handle
-window.__tiny3 = { enterPlay, exitPlay, isPlaying: () => playing, markDirty, serializer, editor };
+window.__tiny3 = { enterPlay, exitPlay, isPlaying: () => playing, markDirty, serializer, editor, exporter };
 
 // keyboard shortcuts for undo/redo/save/load (not while typing in a field)
 window.addEventListener('keydown', (e) => {
