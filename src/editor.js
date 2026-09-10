@@ -5,6 +5,31 @@ import { Entity } from './entity.js';
 const DEG = 180 / Math.PI;
 const RAD = Math.PI / 180;
 
+const PRIMITIVE_GEOS = {
+  box: () => new THREE.BoxGeometry(1.5, 1.5, 1.5),
+  sphere: () => new THREE.SphereGeometry(0.9, 32, 16),
+  cone: () => new THREE.ConeGeometry(0.9, 2, 24),
+  cylinder: () => new THREE.CylinderGeometry(0.7, 0.7, 1.8, 24),
+  torus: () => new THREE.TorusGeometry(0.9, 0.35, 16, 40),
+};
+
+const LIGHT_TYPES = {
+  directional: (d) => new THREE.DirectionalLight(d.color, d.intensity),
+  point: (d) => new THREE.PointLight(d.color, d.intensity, d.distance ?? 0, d.decay ?? 2),
+  spot: (d) => new THREE.SpotLight(d.color, d.intensity, d.distance ?? 0, d.angle ?? Math.PI / 6, d.penumbra ?? 0, d.decay ?? 2),
+  ambient: (d) => new THREE.AmbientLight(d.color, d.intensity),
+};
+
+function primitiveKind(geo) {
+  if (!geo) return null;
+  if (geo.type === 'BoxGeometry') return 'box';
+  if (geo.type === 'SphereGeometry') return 'sphere';
+  if (geo.type === 'ConeGeometry') return 'cone';
+  if (geo.type === 'CylinderGeometry') return 'cylinder';
+  if (geo.type === 'TorusGeometry') return 'torus';
+  return null;
+}
+
 /**
  * ObjectEditor — scene editing with a real transform gizmo.
  *
@@ -37,12 +62,16 @@ export class ObjectEditor {
 
     this.selectables = [];
     this.selected = null;
+    this.selectedSet = new Set(); // multi-select
     this._raycaster = new THREE.Raycaster();
     this._gizmoMode = 'translate';
     this.statusPrefix = ''; // e.g. '▶ PLAYING · ' while in play mode
     this._texLoader = new THREE.TextureLoader();
     this._audioLoader = new THREE.AudioLoader();
     this._dragStart = null; // transform snapshot for undoing gizmo drags
+    this._dragStartMulti = null; // Map entity -> snapshot for multi-select gizmo drags
+    this._clipboard = null; // JSON string for copy/paste
+    this.snap = { translate: 0, rotate: 0, scale: 0 }; // 0 = off
 
     // --- transform gizmo ---
     this.gizmo = new TransformControls(engine.camera, engine.renderer.domElement);
@@ -51,8 +80,24 @@ export class ObjectEditor {
     // don't let the orbit camera fight the gizmo while dragging its handles
     this.gizmo.addEventListener('dragging-changed', (e) => {
       if (engine.cameraRig) engine.cameraRig.enabled = !e.value;
-      if (e.value) this._dragStart = this._snapshot();       // drag began
-      else this._recordTransform();                          // drag ended
+      if (e.value) {
+        if (this.selectedSet.size > 1) this._dragStartMulti = this._snapshotMulti();
+        else this._dragStart = this._snapshot();
+      } else {
+        if (this.selectedSet.size > 1) this._recordTransformMulti();
+        else this._recordTransform();
+      }
+    });
+
+    // apply snapping while dragging
+    this.gizmo.addEventListener('change', () => {
+      if (!this.gizmo.dragging) return;
+      const primary = this._primarySelection();
+      if (!primary) return;
+      this._applySnap(primary.object3D);
+      this._syncMultiToPrimary(primary);
+      this._helper.setFromObject(primary.object3D);
+      this._syncInspector();
     });
 
     // --- selection highlight ---
@@ -82,17 +127,33 @@ export class ObjectEditor {
 
   // ---------- selection ----------
 
-  select(entity) {
-    this.selected = entity;
+  select(entity, { additive = false, keepGizmo = false } = {}) {
+    if (!entity) {
+      this.selected = null;
+      this.selectedSet.clear();
+    } else if (additive) {
+      if (this.selectedSet.has(entity)) {
+        this.selectedSet.delete(entity);
+      } else {
+        this.selectedSet.add(entity);
+      }
+      this.selected = entity;
+    } else {
+      this.selectedSet.clear();
+      this.selectedSet.add(entity);
+      this.selected = entity;
+    }
+
     this._clearLightHelper();
-    if (entity) {
-      this.gizmo.attach(entity.object3D);
-      if (entity.object3D.isLight) {
+    const primary = this._primarySelection();
+    if (primary) {
+      if (!keepGizmo) this.gizmo.attach(primary.object3D);
+      if (primary.object3D.isLight) {
         this._helper.visible = false;
-        this._makeLightHelper(entity.object3D);
+        this._makeLightHelper(primary.object3D);
       } else {
         this._helper.visible = true;
-        this._helper.setFromObject(entity.object3D);
+        this._helper.setFromObject(primary.object3D);
       }
     } else {
       this.gizmo.detach();
@@ -100,6 +161,12 @@ export class ObjectEditor {
     }
     this._renderHierarchy();
     this._renderInspector();
+  }
+
+  /** The entity that drives the gizmo and inspector. */
+  _primarySelection() {
+    return this.selected && this.selectedSet.has(this.selected) ? this.selected
+      : this.selectedSet.values().next().value || null;
   }
 
   _clearLightHelper() {
@@ -173,6 +240,15 @@ export class ObjectEditor {
     };
   }
 
+  _snapshotMulti() {
+    const map = new Map();
+    for (const e of this.selectedSet) {
+      const o = e.object3D;
+      map.set(e, { position: o.position.clone(), rotation: o.rotation.clone(), scale: o.scale.clone() });
+    }
+    return map;
+  }
+
   _applySnapshot(o, snap) {
     o.position.copy(snap.position);
     o.rotation.copy(snap.rotation);
@@ -180,6 +256,19 @@ export class ObjectEditor {
     this._helper.setFromObject(o);
     this._syncInspector();
     this._updateSolidHelper(this.selected);
+  }
+
+  _applySnapshotMulti(map) {
+    for (const [e, snap] of map) {
+      const o = e.object3D;
+      o.position.copy(snap.position);
+      o.rotation.copy(snap.rotation);
+      o.scale.copy(snap.scale);
+      this._updateSolidHelper(e);
+    }
+    const primary = this._primarySelection();
+    if (primary) this._helper.setFromObject(primary.object3D);
+    this._syncInspector();
   }
 
   /** After a gizmo drag ends, record the before/after transform for undo. */
@@ -199,6 +288,68 @@ export class ObjectEditor {
       undo() { self._applySnapshot(o, before); },
       redo() { self._applySnapshot(o, after); },
     });
+  }
+
+  _recordTransformMulti() {
+    const before = this._dragStartMulti;
+    this._dragStartMulti = null;
+    if (!before || !this.history) return;
+    const after = this._snapshotMulti();
+    let changed = false;
+    for (const [e, b] of before) {
+      const a = after.get(e);
+      if (!a || !b.position.equals(a.position) || !b.rotation.equals(a.rotation) || !b.scale.equals(a.scale)) {
+        changed = true; break;
+      }
+    }
+    if (!changed) return;
+    const self = this;
+    this.history.push({
+      label: 'transform multi',
+      undo() { self._applySnapshotMulti(before); },
+      redo() { self._applySnapshotMulti(after); },
+    });
+  }
+
+  _applySnap(o) {
+    const snap = (v, step) => step > 0 ? Math.round(v / step) * step : v;
+    if (this.snap.translate > 0 && this._gizmoMode === 'translate') {
+      o.position.x = snap(o.position.x, this.snap.translate);
+      o.position.y = snap(o.position.y, this.snap.translate);
+      o.position.z = snap(o.position.z, this.snap.translate);
+    }
+    if (this.snap.rotate > 0 && this._gizmoMode === 'rotate') {
+      const step = this.snap.rotate * RAD;
+      o.rotation.x = snap(o.rotation.x, step);
+      o.rotation.y = snap(o.rotation.y, step);
+      o.rotation.z = snap(o.rotation.z, step);
+    }
+    if (this.snap.scale > 0 && this._gizmoMode === 'scale') {
+      o.scale.x = snap(o.scale.x, this.snap.scale);
+      o.scale.y = snap(o.scale.y, this.snap.scale);
+      o.scale.z = snap(o.scale.z, this.snap.scale);
+    }
+  }
+
+  /** When multiple objects are selected, the gizmo drives the primary; copy the same delta to the rest. */
+  _syncMultiToPrimary(primary) {
+    if (this.selectedSet.size <= 1) return;
+    const base = this._dragStartMulti?.get(primary);
+    if (!base) return;
+    const o = primary.object3D;
+    const dp = new THREE.Vector3().subVectors(o.position, base.position);
+    const dr = new THREE.Vector3(o.rotation.x - base.rotation.x, o.rotation.y - base.rotation.y, o.rotation.z - base.rotation.z);
+    const ds = new THREE.Vector3().subVectors(o.scale, base.scale);
+    for (const e of this.selectedSet) {
+      if (e === primary) continue;
+      const snap = this._dragStartMulti.get(e);
+      if (!snap) continue;
+      const t = e.object3D;
+      t.position.copy(snap.position).add(dp);
+      t.rotation.set(snap.rotation.x + dr.x, snap.rotation.y + dr.y, snap.rotation.z + dr.z);
+      t.scale.copy(snap.scale).add(ds);
+      this._updateSolidHelper(e);
+    }
   }
 
   /** Record an add/remove so it can be undone/redone. */
@@ -335,7 +486,10 @@ export class ObjectEditor {
           while (node) { if (node === e.object3D) return true; node = node.parent; }
           return false;
         });
-        if (entity && entity !== this.selected) this.select(entity);
+        if (entity) {
+          const additive = input.isDown('ShiftLeft') || input.isDown('ShiftRight');
+          this.select(entity, { additive });
+        }
       } else if (this.selected) {
         this.select(null);
       }
@@ -365,14 +519,171 @@ export class ObjectEditor {
   }
 
   deleteSelected() {
-    const entity = this.selected;
-    if (!entity) return;
+    const targets = this.selectedSet.size > 0 ? [...this.selectedSet] : (this.selected ? [this.selected] : []);
+    if (!targets.length) return;
     this.select(null);
-    this._cleanupEntityMedia(entity);
-    if (typeof entity.destroy === 'function') entity.destroy(this.engine);
-    else this.engine.remove(entity);
-    this.unregister(entity);
-    this._recordAddRemove(entity, false); // undoable delete
+    const self = this;
+    this.history.push({
+      label: targets.length > 1 ? 'delete multi' : 'delete',
+      undo() {
+        for (const e of targets) {
+          self.engine.add(e);
+          self.register(e);
+        }
+        self.select(targets[0]);
+      },
+      redo() {
+        for (const e of targets) {
+          self._cleanupEntityMedia(e);
+          if (typeof e.destroy === 'function') e.destroy(self.engine);
+          else self.engine.remove(e);
+          self.unregister(e);
+        }
+      },
+    });
+    for (const e of targets) {
+      this._cleanupEntityMedia(e);
+      if (typeof e.destroy === 'function') e.destroy(this.engine);
+      else this.engine.remove(e);
+      this.unregister(e);
+    }
+  }
+
+  /** Copy the current selection to a JSON clipboard. */
+  copySelection() {
+    const targets = this.selectedSet.size > 0 ? [...this.selectedSet] : (this.selected ? [this.selected] : []);
+    if (!targets.length) return false;
+    const records = targets.map((e) => this._serializeForClipboard(e));
+    this._clipboard = JSON.stringify(records);
+    return true;
+  }
+
+  /** Paste the clipboard, creating new entities offset slightly from the originals. */
+  pasteSelection() {
+    if (!this._clipboard) return null;
+    const records = JSON.parse(this._clipboard);
+    const created = [];
+    for (const rec of records) {
+      const entity = this._deserializeFromClipboard(rec);
+      if (entity) {
+        this.engine.add(entity);
+        this.register(entity);
+        this._recordAddRemove(entity, true);
+        created.push(entity);
+      }
+    }
+    if (created.length) {
+      this.select(null);
+      for (const e of created) this.selectedSet.add(e);
+      this.selected = created[0];
+      this._renderHierarchy();
+      this._renderInspector();
+    }
+    return created;
+  }
+
+  /** Duplicate the current selection (supports multi-select). */
+  duplicateSelection() {
+    const targets = this.selectedSet.size > 0 ? [...this.selectedSet] : (this.selected ? [this.selected] : []);
+    const created = [];
+    for (const sel of targets) {
+      const o = sel.object3D;
+      const clone = o.clone(true);
+      clone.position.x += 1.5;
+      clone.name = (o.name || 'Object') + ' copy';
+      const entity = new Entity(clone);
+      entity.solid = sel.solid;
+      entity.object3D.userData.kind = o.userData.kind;
+      this.engine.add(entity);
+      this.register(entity);
+      this._recordAddRemove(entity, true);
+      created.push(entity);
+    }
+    if (created.length) {
+      this.select(null);
+      for (const e of created) this.selectedSet.add(e);
+      this.selected = created[0];
+      this._renderHierarchy();
+      this._renderInspector();
+    }
+    return created;
+  }
+
+  _serializeForClipboard(entity) {
+    const o = entity.object3D;
+    const rec = {
+      name: o.name,
+      position: { x: o.position.x, y: o.position.y, z: o.position.z },
+      rotation: { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z },
+      scale: { x: o.scale.x, y: o.scale.y, z: o.scale.z },
+      solid: entity.solid,
+      kind: o.userData.kind,
+    };
+    if (o.isLight) {
+      rec.light = {
+        type: o.isDirectionalLight ? 'directional' : o.isPointLight ? 'point' : o.isSpotLight ? 'spot' : 'ambient',
+        color: '#' + o.color.getHexString(),
+        intensity: o.intensity,
+        castShadow: !!o.castShadow,
+      };
+    }
+    const mesh = this._firstMesh(o);
+    if (mesh && mesh.material && mesh.material.isMeshStandardMaterial) {
+      const m = mesh.material;
+      rec.material = {
+        color: '#' + m.color.getHexString(),
+        metalness: m.metalness,
+        roughness: m.roughness,
+        opacity: m.opacity,
+        wireframe: !!m.wireframe,
+      };
+    }
+    if (o.userData.assetUrl) rec.assetUrl = o.userData.assetUrl;
+    if (o.geometry && !rec.assetUrl) {
+      const kind = primitiveKind(o.geometry);
+      if (kind) rec.primitive = kind;
+    }
+    return rec;
+  }
+
+  _deserializeFromClipboard(rec) {
+    let object3D;
+    if (rec.light) {
+      const light = LIGHT_TYPES[rec.light.type](rec.light);
+      light.castShadow = !!rec.light.castShadow;
+      object3D = light;
+    } else if (rec.assetUrl) {
+      // GLB paste: can't load synchronously; skip
+      return null;
+    } else if (rec.primitive) {
+      const geo = (PRIMITIVE_GEOS[rec.primitive] || PRIMITIVE_GEOS.box)();
+      const m = rec.material || {};
+      const mat = new THREE.MeshStandardMaterial({
+        color: m.color || 0x539bf5,
+        metalness: m.metalness ?? 0,
+        roughness: m.roughness ?? 1,
+        opacity: m.opacity ?? 1,
+        wireframe: !!m.wireframe,
+        transparent: (m.opacity ?? 1) < 1,
+      });
+      object3D = new THREE.Mesh(geo, mat);
+      object3D.castShadow = object3D.receiveShadow = true;
+    } else {
+      return null;
+    }
+    object3D.name = rec.name;
+    object3D.position.set(rec.position.x + 1.5, rec.position.y, rec.position.z);
+    object3D.rotation.set(rec.rotation.x, rec.rotation.y, rec.rotation.z);
+    object3D.scale.set(rec.scale.x, rec.scale.y, rec.scale.z);
+    object3D.userData.kind = rec.kind || 'Prop';
+    const entity = new Entity(object3D);
+    entity.solid = !!rec.solid;
+    return entity;
+  }
+
+  setSnap(type, value) {
+    this.snap[type] = value;
+    this._renderStatus();
   }
 
   /** Stop + drop any animation mixer / positional audio bound to an entity. */
@@ -423,10 +734,13 @@ export class ObjectEditor {
     this.listEl.innerHTML = '';
     for (const entity of this.selectables) {
       const li = document.createElement('li');
-      if (entity === this.selected) li.classList.add('selected');
+      if (this.selectedSet.has(entity)) li.classList.add('selected');
       const kind = entity.object3D.userData.kind || entity.constructor.name;
       li.innerHTML = `<span class="ico">${this._icon(kind)}</span><span class="nm">${this._name(entity)}</span>`;
-      li.addEventListener('click', () => this.select(entity));
+      li.addEventListener('click', (e) => {
+        const additive = e.shiftKey;
+        this.select(entity, { additive });
+      });
       this.listEl.appendChild(li);
     }
   }
@@ -547,18 +861,7 @@ export class ObjectEditor {
     this._wireAudioSection(sel);
 
     this.inspectorEl.querySelector('#insp-del').addEventListener('click', () => this.deleteSelected());
-    this.inspectorEl.querySelector('#insp-dup').addEventListener('click', () => {
-      const clone = o.clone(true);
-      clone.position.x += 1.5;
-      clone.name = (o.name || 'Object') + ' copy';
-      const entity = new Entity(clone);
-      entity.solid = sel.solid;
-      entity.object3D.userData.kind = o.userData.kind;
-      this.engine.add(entity);
-      this.register(entity);
-      this._recordAddRemove(entity, true); // undoable duplicate
-      this.select(entity);
-    });
+    this.inspectorEl.querySelector('#insp-dup').addEventListener('click', () => this.duplicateSelection());
   }
 
   _vecRow(key, label, v) {
@@ -1088,8 +1391,16 @@ export class ObjectEditor {
   _renderStatus() {
     if (!this.statusEl) return;
     const cam = this.engine.cameraRig ? this.engine.cameraRig.mode : 'orbit';
-    const sel = this.selected ? ` · selected: <b>${this._name(this.selected)}</b>` : '';
-    this.statusEl.innerHTML = `${this.statusPrefix}${cam} cam · ${this._gizmoMode} gizmo${sel}`;
+    const count = this.selectedSet.size;
+    const sel = count > 1 ? ` · selected: <b>${count} objects</b>`
+      : this.selected ? ` · selected: <b>${this._name(this.selected)}</b>`
+      : '';
+    const snap = [];
+    if (this.snap.translate > 0) snap.push(`grid ${this.snap.translate}`);
+    if (this.snap.rotate > 0) snap.push(`angle ${this.snap.rotate}°`);
+    if (this.snap.scale > 0) snap.push(`scale ${this.snap.scale}`);
+    const snapText = snap.length ? ` · snap: ${snap.join(', ')}` : '';
+    this.statusEl.innerHTML = `${this.statusPrefix}${cam} cam · ${this._gizmoMode} gizmo${sel}${snapText}`;
   }
 }
 

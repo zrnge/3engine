@@ -287,6 +287,21 @@ bindCheck('cam-rotate', rig, 'rotateWithTarget', 'camera rotate with target');
 bindCheck('cam-lock-y', rig, 'followLockY', 'camera lock Y');
 bindCheck('cam-orbit-lock', rig, 'orbitLockTarget', 'camera orbit lock target');
 
+// snapping controls
+function bindSnap(id, type) {
+  const el = document.getElementById(id);
+  const val = document.getElementById(`${id}-v`);
+  if (!el) return;
+  el.addEventListener('input', () => {
+    const v = parseFloat(el.value);
+    editor.setSnap(type, v);
+    if (val) val.textContent = v <= 0 ? 'off' : String(v);
+  });
+}
+bindSnap('snap-trans', 'translate');
+bindSnap('snap-rot', 'rotate');
+bindSnap('snap-scl', 'scale');
+
 // camera target dropdown
 {
   let camTargetBefore = rig.target;
@@ -488,6 +503,8 @@ function refreshHistoryButtons() {
 history.onChange = () => { refreshHistoryButtons(); markDirty(); };
 undoBtn.addEventListener('click', () => history.undo());
 redoBtn.addEventListener('click', () => history.redo());
+document.getElementById('btn-copy').addEventListener('click', () => editor.copySelection());
+document.getElementById('btn-paste').addEventListener('click', () => editor.pasteSelection());
 document.getElementById('btn-save').addEventListener('click', () => serializer.saveToFile());
 document.getElementById('btn-load').addEventListener('click', () => {
   serializer.loadFromFile().then((made) => {
@@ -588,6 +605,9 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     serializer.loadFromFile().then((made) => { if (made) { history.clear(); refreshCamTargets(); refreshControlTargets(); } }).catch(() => {});
   }
+  else if (mod && e.code === 'KeyC') { e.preventDefault(); editor.copySelection(); }
+  else if (mod && e.code === 'KeyV') { e.preventDefault(); editor.pasteSelection(); }
+  else if (mod && e.code === 'KeyD') { e.preventDefault(); editor.duplicateSelection(); }
 });
 
 // when a scene is loaded, refresh the player-controls panel to match

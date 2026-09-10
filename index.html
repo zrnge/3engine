@@ -176,6 +176,9 @@
     <button class="tbtn" id="btn-undo" title="Undo (Ctrl+Z)">↶ Undo <span class="k">Ctrl+Z</span></button>
     <button class="tbtn" id="btn-redo" title="Redo (Ctrl+Y)">↷ Redo <span class="k">Ctrl+Y</span></button>
     <div class="sep"></div>
+    <button class="tbtn" id="btn-copy" title="Copy selection (Ctrl+C)">⎘ Copy <span class="k">Ctrl+C</span></button>
+    <button class="tbtn" id="btn-paste" title="Paste selection (Ctrl+V)">⎗ Paste <span class="k">Ctrl+V</span></button>
+    <div class="sep"></div>
     <button class="tbtn" id="btn-save" title="Save scene as JSON (Ctrl+S)">💾 Save <span class="k">Ctrl+S</span></button>
     <button class="tbtn" id="btn-load" title="Load a scene from JSON (Ctrl+O)">📂 Load <span class="k">Ctrl+O</span></button>
   </div>
@@ -232,6 +235,16 @@
       <label class="check-row"><input type="checkbox" id="cam-rotate" checked /> Rotate with target</label>
       <label class="check-row"><input type="checkbox" id="cam-lock-y" /> Lock follow Y (top-down)</label>
       <label class="check-row"><input type="checkbox" id="cam-orbit-lock" checked /> Orbit locks to target</label>
+      <h4 class="insp-h">Snapping</h4>
+      <div class="prop-row"><label>Grid</label>
+        <input type="range" id="snap-trans" min="0" max="2" step="0.25" value="0" />
+        <span class="val" id="snap-trans-v">off</span></div>
+      <div class="prop-row"><label>Angle</label>
+        <input type="range" id="snap-rot" min="0" max="90" step="15" value="0" />
+        <span class="val" id="snap-rot-v">off</span></div>
+      <div class="prop-row"><label>Scale</label>
+        <input type="range" id="snap-scl" min="0" max="1" step="0.25" value="0" />
+        <span class="val" id="snap-scl-v">off</span></div>
     </div>
   </div>
 
@@ -272,7 +285,7 @@
     <span class="k">click</span> select · drag gizmo handles ·
     <span class="k">G</span>/<span class="k">R</span>/<span class="k">S</span> gizmo mode ·
     <span class="k">Del</span> delete · <span class="k">Esc</span> deselect ·
-    <span class="k">▶</span> play · scene autosaves
+    <span class="k">▶</span> play · scene autosaves · <span class="k">Shift+click</span> multi-select
   </div>
 
   <script type="module" src="./src/game.js"></script>
