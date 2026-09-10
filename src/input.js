@@ -56,7 +56,11 @@ export class Input {
       }
     });
 
-    window.addEventListener('wheel', (e) => { this.wheel += e.deltaY; }, { passive: true });
+    window.addEventListener('wheel', (e) => {
+      // don't let panel scrolling leak into the 3D view
+      if (e.target && e.target.closest && e.target.closest('.panel')) return;
+      this.wheel += e.deltaY;
+    }, { passive: true });
 
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement != null;
