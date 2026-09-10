@@ -27,6 +27,10 @@ export function makeDraggable(panel, handleSelector = 'h3') {
     const dy = e.clientY - rect.top;
     let dragging = false;
 
+    // capture the pointer immediately on the handle so drag continues even if
+    // the cursor leaves the header or the panel
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+
     const onMove = (ev) => {
       if (!dragging) {
         // only start the drag (and take over the gesture) after real movement
@@ -39,7 +43,6 @@ export function makeDraggable(panel, handleSelector = 'h3') {
         panel.style.bottom = 'auto';
         panel.style.transform = 'none';
         handle.style.cursor = 'grabbing';
-        handle.setPointerCapture(e.pointerId);
       }
       const x = Math.max(0, Math.min(ev.clientX - dx, window.innerWidth - rect.width));
       const y = Math.max(0, Math.min(ev.clientY - dy, window.innerHeight - rect.height));
@@ -48,12 +51,13 @@ export function makeDraggable(panel, handleSelector = 'h3') {
     };
     const onUp = () => {
       if (dragging) handle.style.cursor = 'grab';
-      handle.removeEventListener('pointermove', onMove);
-      handle.removeEventListener('pointerup', onUp);
-      handle.removeEventListener('pointercancel', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
     };
-    handle.addEventListener('pointermove', onMove);
-    handle.addEventListener('pointerup', onUp);
-    handle.addEventListener('pointercancel', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
   });
 }
