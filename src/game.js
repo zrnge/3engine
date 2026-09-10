@@ -214,39 +214,96 @@ function refreshCamTargets() {
   camTargetSel.value = idx === -1 ? '' : String(idx);
 }
 
-camTargetSel.addEventListener('change', () => {
-  const i = parseInt(camTargetSel.value, 10);
-  const entity = Number.isInteger(i) ? editor.selectables[i] : null;
-  rig.setTarget(entity ? entity.object3D : null);
-});
-
-function bindSlider(id, fn) {
-  const el = document.getElementById(id);
-  const val = document.getElementById(`${id}-v`);
-  el.addEventListener('input', () => {
-    const v = parseFloat(el.value);
-    fn(v);
-    if (val) val.textContent = Number.isInteger(v) ? String(v) : v.toFixed(1);
+function recordValue(target, prop, before, after, apply, label = 'camera') {
+  if (before === after) return;
+  history.push({
+    label,
+    undo() { apply(before); },
+    redo() { apply(after); },
   });
 }
 
-bindSlider('cam-fov', (v) => rig.setFov(v));
-bindSlider('cam-offset', (v) => { rig.followOffset = v; });
-bindSlider('cam-height', (v) => { rig.followHeight = v; });
-bindSlider('cam-lookup', (v) => { rig.followLookUp = v; });
-bindSlider('cam-ahead', (v) => { rig.followLookAhead = v; });
-bindSlider('cam-lerp', (v) => { rig.followLerp = v; });
-bindSlider('cam-damp', (v) => { rig.followDamping = v; });
-bindSlider('cam-orbit-h', (v) => { rig.orbitHeight = v; });
-document.getElementById('cam-rotate').addEventListener('change', (e) => {
-  rig.rotateWithTarget = e.target.checked;
-});
-document.getElementById('cam-lock-y').addEventListener('change', (e) => {
-  rig.followLockY = e.target.checked;
-});
-document.getElementById('cam-orbit-lock').addEventListener('change', (e) => {
-  rig.orbitLockTarget = e.target.checked;
-});
+function bindSlider(id, prop, target, apply, label = 'camera') {
+  const el = document.getElementById(id);
+  const val = document.getElementById(`${id}-v`);
+  let before = target[prop];
+  el.addEventListener('input', () => {
+    const v = parseFloat(el.value);
+    apply(v);
+    if (val) val.textContent = Number.isInteger(v) ? String(v) : v.toFixed(1);
+  });
+  el.addEventListener('change', () => {
+    const after = target[prop];
+    recordValue(target, prop, before, after, (v) => {
+      apply(v);
+      el.value = v;
+      if (val) val.textContent = Number.isInteger(v) ? String(v) : v.toFixed(1);
+    }, label);
+    before = after;
+  });
+}
+
+// FOV slider: record before/after camera.fov (setFov doesn't store on rig)
+{
+  const fovEl = document.getElementById('cam-fov');
+  const fovVal = document.getElementById('cam-fov-v');
+  let fovBefore = rig.camera.fov;
+  fovEl.addEventListener('input', () => {
+    const v = parseFloat(fovEl.value);
+    rig.setFov(v);
+    fovVal.textContent = String(v);
+  });
+  fovEl.addEventListener('change', () => {
+    const after = rig.camera.fov;
+    recordValue(rig.camera, 'fov', fovBefore, after, (v) => {
+      rig.setFov(v);
+      fovEl.value = v;
+      fovVal.textContent = String(v);
+    }, 'camera FOV');
+    fovBefore = after;
+  });
+}
+
+bindSlider('cam-offset', 'followOffset', rig, (v) => { rig.followOffset = v; }, 'camera offset');
+bindSlider('cam-height', 'followHeight', rig, (v) => { rig.followHeight = v; }, 'camera height');
+bindSlider('cam-lookup', 'followLookUp', rig, (v) => { rig.followLookUp = v; }, 'camera look up');
+bindSlider('cam-ahead', 'followLookAhead', rig, (v) => { rig.followLookAhead = v; }, 'camera look ahead');
+bindSlider('cam-lerp', 'followLerp', rig, (v) => { rig.followLerp = v; }, 'camera lerp');
+bindSlider('cam-damp', 'followDamping', rig, (v) => { rig.followDamping = v; }, 'camera damping');
+bindSlider('cam-orbit-h', 'orbitHeight', rig, (v) => { rig.orbitHeight = v; }, 'camera orbit height');
+
+function bindCheck(id, target, prop, label = 'camera') {
+  const el = document.getElementById(id);
+  let before = target[prop];
+  el.addEventListener('change', () => {
+    const after = el.checked;
+    recordValue(target, prop, before, after, (v) => { target[prop] = v; el.checked = v; }, label);
+    target[prop] = after;
+    before = after;
+  });
+}
+
+bindCheck('cam-rotate', rig, 'rotateWithTarget', 'camera rotate with target');
+bindCheck('cam-lock-y', rig, 'followLockY', 'camera lock Y');
+bindCheck('cam-orbit-lock', rig, 'orbitLockTarget', 'camera orbit lock target');
+
+// camera target dropdown
+{
+  let camTargetBefore = rig.target;
+  camTargetSel.addEventListener('focus', () => { camTargetBefore = rig.target; });
+  camTargetSel.addEventListener('change', () => {
+    const i = parseInt(camTargetSel.value, 10);
+    const entity = Number.isInteger(i) ? editor.selectables[i] : null;
+    const after = entity ? entity.object3D : null;
+    recordValue(rig, 'target', camTargetBefore, after, (v) => {
+      rig.setTarget(v);
+      const idx = v ? editor.selectables.findIndex((e) => e.object3D === v) : -1;
+      camTargetSel.value = idx === -1 ? '' : String(idx);
+    }, 'camera target');
+    rig.setTarget(after);
+    camTargetBefore = after;
+  });
+}
 
 // ---- player controls panel: rebindable keys + tuning ----
 const BIND_ACTIONS = ['forward', 'back', 'left', 'right', 'jump', 'fire'];
@@ -307,8 +364,11 @@ function renderBindings() {
     });
     btn.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      const beforeCodes = (player.controls[action] || []).slice();
+      if (beforeCodes.length === 0) return;
       player.controls[action] = [];
       renderBindings();
+      recordControlsChange(action, beforeCodes, []);
     });
     row.appendChild(label);
     row.appendChild(btn);
@@ -321,19 +381,54 @@ window.addEventListener('keydown', (e) => {
   if (!listeningBtn) return;
   e.preventDefault();
   const action = listeningBtn.dataset.action;
+  const beforeCodes = (player.controls[action] || []).slice();
   // keep arrow-key alternates for movement actions; replace everything else
-  const keep = action === 'jump' ? [] : (player.controls[action] || []).filter((c) => c.startsWith('Arrow'));
-  player.controls[action] = [...keep, e.code];
+  const keep = action === 'jump' ? [] : beforeCodes.filter((c) => c.startsWith('Arrow'));
+  const afterCodes = [...keep, e.code];
+  player.controls[action] = afterCodes;
   listeningBtn.classList.remove('listening');
   listeningBtn = null;
   renderBindings();
+  recordControlsChange(action, beforeCodes, afterCodes);
 }, true);
 
 document.getElementById('ctl-enabled').addEventListener('change', (e) => {
-  player.enabled = e.target.checked;
+  const before = player.enabled;
+  const after = e.target.checked;
+  recordValue(player, 'enabled', before, after, (v) => { player.enabled = v; e.target.checked = v; }, 'player enabled');
+  player.enabled = after;
 });
-bindSlider('ctl-speed', (v) => { player.speed = v; });
-bindSlider('ctl-jump', (v) => { player.jumpVelocity = v; });
+bindSlider('ctl-speed', 'speed', player, (v) => { player.speed = v; }, 'player speed');
+bindSlider('ctl-jump', 'jumpVelocity', player, (v) => { player.jumpVelocity = v; }, 'player jump');
+
+// player control target dropdown
+{
+  let ctlTargetBefore = player.target;
+  ctlTargetSel.addEventListener('focus', () => { ctlTargetBefore = player.target; });
+  ctlTargetSel.addEventListener('change', () => {
+    const i = parseInt(ctlTargetSel.value, 10);
+    const entity = Number.isInteger(i) ? editor.selectables[i] : null;
+    const after = entity || null;
+    recordValue(player, 'target', ctlTargetBefore, after, (v) => {
+      player.target = v;
+      const idx = v ? editor.selectables.findIndex((e) => e === v) : -1;
+      ctlTargetSel.value = idx === -1 ? '' : String(idx);
+      refreshControlTargets();
+    }, 'player target');
+    player.target = after;
+    ctlTargetBefore = after;
+  });
+}
+
+// keybinding rebinds — record control map changes
+function recordControlsChange(action, beforeCodes, afterCodes) {
+  if (JSON.stringify(beforeCodes) === JSON.stringify(afterCodes)) return;
+  history.push({
+    label: `bind ${action}`,
+    undo() { player.controls[action] = beforeCodes.slice(); renderBindings(); },
+    redo() { player.controls[action] = afterCodes.slice(); renderBindings(); },
+  });
+}
 
 // mute toggle (defensive: the controls panel may be absent in a cached/old HTML)
 const muteCheck = document.getElementById('aud-mute');

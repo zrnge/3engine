@@ -179,6 +179,7 @@ export class ObjectEditor {
     o.scale.copy(snap.scale);
     this._helper.setFromObject(o);
     this._syncInspector();
+    this._updateSolidHelper(this.selected);
   }
 
   /** After a gizmo drag ends, record the before/after transform for undo. */
@@ -219,6 +220,100 @@ export class ObjectEditor {
       label: added ? 'add' : 'delete',
       undo: added ? remove : add,
       redo: added ? add : remove,
+    });
+  }
+
+  // ---------- generic property undo helpers ----------
+
+  /**
+   * Record a single-value property change command.
+   *   target: object to mutate
+   *   prop:   property name
+   *   before: previous value (primitive clone)
+   *   after:  new value
+   *   apply:  optional function(value) to apply the value
+   */
+  _recordValue(target, prop, before, after, apply = null, label = 'edit') {
+    if (!this.history || before === after) return;
+    const self = this;
+    const doApply = (v) => {
+      if (apply) apply(v);
+      else target[prop] = v;
+      self._renderInspector?.();
+      self._renderHierarchy?.();
+    };
+    this.history.push({
+      label,
+      undo() { doApply(before); },
+      redo() { doApply(after); },
+    });
+  }
+
+  /**
+   * Record a THREE.Color property change command.
+   */
+  _recordColor(target, prop, beforeHex, afterHex, label = 'color') {
+    if (!this.history || beforeHex === afterHex) return;
+    const self = this;
+    this.history.push({
+      label,
+      undo() { target[prop].set(beforeHex); self._renderInspector?.(); },
+      redo() { target[prop].set(afterHex); self._renderInspector?.(); },
+    });
+  }
+
+  /**
+   * Record a Vector3 component change command.
+   */
+  _recordVector(target, beforeVec, afterVec, label = 'transform') {
+    if (!this.history || beforeVec.equals(afterVec)) return;
+    const self = this;
+    this.history.push({
+      label,
+      undo() { target.copy(beforeVec); self._helper.setFromObject(self.selected?.object3D); self._syncInspector?.(); },
+      redo() { target.copy(afterVec); self._helper.setFromObject(self.selected?.object3D); self._syncInspector?.(); },
+    });
+  }
+
+  /**
+   * Record a material map (texture) change command.
+   */
+  _recordMap(mesh, beforeMap, afterMap, label = 'texture') {
+    if (!this.history) return;
+    const self = this;
+    const m = mesh.material;
+    this.history.push({
+      label,
+      undo() {
+        if (m.map && m.map !== beforeMap) m.map.dispose();
+        m.map = beforeMap || null;
+        m.needsUpdate = true;
+        self._renderInspector?.();
+      },
+      redo() {
+        if (m.map && m.map !== afterMap) m.map.dispose();
+        m.map = afterMap || null;
+        m.needsUpdate = true;
+        self._renderInspector?.();
+      },
+    });
+  }
+
+  /**
+   * Record a sound property change command.
+   */
+  _recordSound(rec, prop, before, after, apply = null, label = 'sound') {
+    if (!this.history || before === after) return;
+    const self = this;
+    const doApply = (v) => {
+      rec[prop] = v;
+      if (apply) apply(v);
+      self._renderInspector?.();
+    };
+    this.history.push({
+      label,
+      undo() { doApply(before); },
+      redo() { doApply(after); },
     });
   }
 
@@ -381,13 +476,26 @@ export class ObjectEditor {
         </div>
       </div>`;
 
-    // name
-    this.inspectorEl.querySelector('#insp-name').addEventListener('input', (e) => {
+    // name (record on change/blur)
+    const nameField = this.inspectorEl.querySelector('#insp-name');
+    let nameBefore = o.name;
+    nameField.addEventListener('focus', () => { nameBefore = o.name; });
+    nameField.addEventListener('input', (e) => {
       o.name = e.target.value;
       this._renderHierarchy();
     });
+    nameField.addEventListener('change', () => {
+      this._recordValue(o, 'name', nameBefore, o.name, (v) => { o.name = v; this._renderHierarchy(); }, 'rename');
+      nameBefore = o.name;
+    });
+    nameField.addEventListener('blur', () => {
+      if (o.name !== nameBefore) {
+        this._recordValue(o, 'name', nameBefore, o.name, (v) => { o.name = v; this._renderHierarchy(); }, 'rename');
+        nameBefore = o.name;
+      }
+    });
 
-    // numeric vectors
+    // numeric vectors — record on change/blur per axis
     const vecs = [
       ['pos', o.position, 1],
       ['rot', o.rotation, RAD],
@@ -396,6 +504,8 @@ export class ObjectEditor {
     for (const [key, target, conv] of vecs) {
       for (const axis of ['x', 'y', 'z']) {
         const field = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
+        let axisBefore = target[axis];
+        field.addEventListener('focus', () => { axisBefore = target[axis]; });
         field.addEventListener('input', () => {
           const v = parseFloat(field.value);
           if (Number.isFinite(v)) {
@@ -404,14 +514,29 @@ export class ObjectEditor {
             this.gizmo.updateMatrixWorld?.();
           }
         });
+        field.addEventListener('change', () => {
+          const after = target.clone();
+          target[axis] = axisBefore;
+          const before = target.clone();
+          target.copy(after);
+          this._recordVector(target, before, after, `${key}.${axis}`);
+          axisBefore = target[axis];
+        });
       }
     }
 
     const solidCheck = this.inspectorEl.querySelector('#insp-solid');
     if (solidCheck) {
+      let solidBefore = !!sel.solid;
       solidCheck.addEventListener('change', () => {
-        sel.solid = solidCheck.checked;
+        const after = solidCheck.checked;
+        this._recordValue(sel, 'solid', solidBefore, after, (v) => {
+          sel.solid = v;
+          this._updateSolidHelper(sel);
+        }, 'solid');
+        sel.solid = after;
         this._updateSolidHelper(sel);
+        solidBefore = after;
       });
     }
     this._updateSolidHelper(sel);
@@ -464,16 +589,49 @@ export class ObjectEditor {
   }
 
   _wireLightSection(light) {
-    this.inspectorEl.querySelector('#insp-lcolor').addEventListener('input', (e) => {
+    const q = (s) => this.inspectorEl.querySelector(s);
+
+    // color
+    const colorBefore = '#' + light.color.getHexString();
+    let colorCurrent = colorBefore;
+    q('#insp-lcolor').addEventListener('input', (e) => {
       light.color.set(e.target.value);
+      colorCurrent = e.target.value;
     });
-    const slider = this.inspectorEl.querySelector('#insp-lintensity');
+    q('#insp-lcolor').addEventListener('change', () => {
+      this._recordColor(light, 'color', colorBefore, colorCurrent, 'light color');
+    });
+
+    // intensity
+    const slider = q('#insp-lintensity');
+    let intensityBefore = light.intensity;
     slider.addEventListener('input', () => {
       light.intensity = parseFloat(slider.value);
-      this.inspectorEl.querySelector('#insp-lintensity-v').textContent = light.intensity.toFixed(2);
+      q('#insp-lintensity-v').textContent = light.intensity.toFixed(2);
     });
-    const shadow = this.inspectorEl.querySelector('#insp-shadow');
-    if (shadow) shadow.addEventListener('change', () => { light.castShadow = shadow.checked; });
+    slider.addEventListener('change', () => {
+      this._recordValue(light, 'intensity', intensityBefore, light.intensity, (v) => {
+        light.intensity = v;
+        q('#insp-lintensity').value = v;
+        q('#insp-lintensity-v').textContent = v.toFixed(2);
+      }, 'light intensity');
+      intensityBefore = light.intensity;
+    });
+
+    // cast shadows
+    const shadow = q('#insp-shadow');
+    if (shadow) {
+      let shadowBefore = !!light.castShadow;
+      shadow.addEventListener('change', () => {
+        const after = shadow.checked;
+        this._recordValue(light, 'castShadow', shadowBefore, after, (v) => {
+          light.castShadow = v;
+          shadow.checked = v;
+        }, 'shadows');
+        light.castShadow = after;
+        shadowBefore = after;
+      });
+    }
   }
 
   // ---------- materials & textures ----------
@@ -518,26 +676,56 @@ export class ObjectEditor {
     if (!m || !m.isMeshStandardMaterial) return;
     const q = (s) => this.inspectorEl.querySelector(s);
 
-    q('#insp-mcolor').addEventListener('input', (e) => m.color.set(e.target.value));
+    // color
+    const mcolorBefore = '#' + m.color.getHexString();
+    let mcolorCurrent = mcolorBefore;
+    q('#insp-mcolor').addEventListener('input', (e) => {
+      m.color.set(e.target.value);
+      mcolorCurrent = e.target.value;
+    });
+    q('#insp-mcolor').addEventListener('change', () => {
+      this._recordColor(m, 'color', mcolorBefore, mcolorCurrent, 'material color');
+    });
 
-    const slider = (id, prop, apply) => {
+    // numeric sliders (record on change)
+    const slider = (id, prop, apply, label) => {
       const el = q(`#insp-${id}`);
+      let before = m[prop];
       el.addEventListener('input', () => {
         const v = parseFloat(el.value);
         apply(v);
         q(`#insp-${id}-v`).textContent = v.toFixed(2);
       });
+      el.addEventListener('change', () => {
+        const after = m[prop];
+        this._recordValue(m, prop, before, after, (v) => {
+          apply(v);
+          el.value = v;
+          q(`#insp-${id}-v`).textContent = v.toFixed(2);
+        }, label);
+        before = after;
+      });
     };
-    slider('metal', 'metalness', (v) => { m.metalness = v; });
-    slider('rough', 'roughness', (v) => { m.roughness = v; });
+    slider('metal', 'metalness', (v) => { m.metalness = v; }, 'metalness');
+    slider('rough', 'roughness', (v) => { m.roughness = v; }, 'roughness');
     slider('opacity', 'opacity', (v) => {
       m.opacity = v;
       m.transparent = v < 1;
       m.needsUpdate = true;
+    }, 'opacity');
+
+    // wireframe
+    const wireBefore = !!m.wireframe;
+    q('#insp-wire').addEventListener('change', (e) => {
+      const after = e.target.checked;
+      this._recordValue(m, 'wireframe', wireBefore, after, (v) => {
+        m.wireframe = v;
+        e.target.checked = v;
+      }, 'wireframe');
+      m.wireframe = after;
     });
 
-    q('#insp-wire').addEventListener('change', (e) => { m.wireframe = e.target.checked; });
-
+    // texture load
     q('#insp-tex-load').addEventListener('click', () => {
       const picker = document.createElement('input');
       picker.type = 'file';
@@ -549,7 +737,9 @@ export class ObjectEditor {
         this._texLoader.load(url, (tex) => {
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.name = file.name;
-          if (m.map) m.map.dispose();
+          const oldMap = m.map;
+          this._recordMap(mesh, oldMap, tex, 'load texture');
+          if (m.map && m.map !== oldMap) m.map.dispose();
           m.map = tex;
           m.needsUpdate = true;
           URL.revokeObjectURL(url);
@@ -560,8 +750,15 @@ export class ObjectEditor {
       picker.click();
     });
 
+    // texture clear
     q('#insp-tex-clear').addEventListener('click', () => {
-      if (m.map) { m.map.dispose(); m.map = null; m.needsUpdate = true; }
+      if (m.map) {
+        const oldMap = m.map;
+        this._recordMap(mesh, oldMap, null, 'clear texture');
+        m.map.dispose();
+        m.map = null;
+        m.needsUpdate = true;
+      }
       q('#insp-texname').textContent = 'none';
       q('#insp-tex-clear').disabled = true;
     });
@@ -726,18 +923,35 @@ export class ObjectEditor {
     // per-card wiring
     list().forEach((r, i) => {
       // name
-      q(`#insp-aud-name-${i}`).addEventListener('input', (e) => { r.name = e.target.value; });
+      const nameEl = q(`#insp-aud-name-${i}`);
+      let audNameBefore = r.name;
+      nameEl.addEventListener('focus', () => { audNameBefore = r.name; });
+      nameEl.addEventListener('input', (e) => { r.name = e.target.value; });
+      nameEl.addEventListener('change', () => {
+        this._recordSound(r, 'name', audNameBefore, r.name, (v) => { r.name = v; }, 'sound name');
+        audNameBefore = r.name;
+      });
 
       // type
+      const typeBefore = r.type;
       q(`#insp-aud-type-${i}`).addEventListener('change', (e) => {
-        this._changeSoundType(r, e.target.value);
-        this._renderInspector();
+        const after = e.target.value;
+        this._recordSound(r, 'type', typeBefore, after, (v) => {
+          this._changeSoundType(r, v);
+          this._renderInspector();
+        }, 'sound type');
+        this._changeSoundType(r, after);
       });
 
       // trigger
-      q(`#insp-aud-trig-${i}`).addEventListener('change', (e) => { r.trigger = e.target.value || null; });
+      const trigBefore = r.trigger || '';
+      q(`#insp-aud-trig-${i}`).addEventListener('change', (e) => {
+        const after = e.target.value || null;
+        this._recordSound(r, 'trigger', trigBefore, after, (v) => { r.trigger = v || null; }, 'sound trigger');
+        r.trigger = after;
+      });
 
-      // play/stop
+      // play/stop (not undoable — it's a preview)
       q(`[data-aud="play-${i}"]`).addEventListener('click', () => {
         this.engine.unlockAudio();
         if (r.audio.isPlaying) r.audio.stop(); else r.audio.play();
@@ -758,29 +972,59 @@ export class ObjectEditor {
 
       // volume
       const vol = q(`#insp-aud-vol-${i}`);
+      let volBefore = r.volume;
       vol.addEventListener('input', () => {
         r.volume = parseFloat(vol.value);
         r.audio.setVolume(r.volume);
         q(`#insp-aud-vol-v-${i}`).textContent = r.volume.toFixed(2);
       });
+      vol.addEventListener('change', () => {
+        this._recordSound(r, 'volume', volBefore, r.volume, (v) => {
+          r.volume = v;
+          r.audio.setVolume(v);
+          q(`#insp-aud-vol-${i}`).value = v;
+          q(`#insp-aud-vol-v-${i}`).textContent = v.toFixed(2);
+        }, 'sound volume');
+        volBefore = r.volume;
+      });
 
       // distance
       const dist = q(`#insp-aud-dist-${i}`);
+      let distBefore = r.refDistance;
       dist.addEventListener('input', () => {
         r.refDistance = parseInt(dist.value, 10);
         if (r.type === 'positional') r.audio.setRefDistance(r.refDistance);
         q(`#insp-aud-dist-v-${i}`).textContent = String(r.refDistance);
       });
+      dist.addEventListener('change', () => {
+        this._recordSound(r, 'refDistance', distBefore, r.refDistance, (v) => {
+          r.refDistance = v;
+          if (r.type === 'positional') r.audio.setRefDistance(v);
+          q(`#insp-aud-dist-${i}`).value = v;
+          q(`#insp-aud-dist-v-${i}`).textContent = String(v);
+        }, 'sound distance');
+        distBefore = r.refDistance;
+      });
 
       // loop
+      const loopBefore = !!r.loop;
       q(`#insp-aud-loop-${i}`).addEventListener('change', (e) => {
-        r.loop = e.target.checked;
-        r.audio.setLoop(r.loop);
+        const after = e.target.checked;
+        this._recordSound(r, 'loop', loopBefore, after, (v) => {
+          r.loop = v;
+          r.audio.setLoop(v);
+          e.target.checked = v;
+        }, 'sound loop');
+        r.loop = after;
+        r.audio.setLoop(after);
       });
 
       // autoplay
+      const autoBefore = !!r.autoplay;
       q(`#insp-aud-auto-${i}`).addEventListener('change', (e) => {
-        r.autoplay = e.target.checked;
+        const after = e.target.checked;
+        this._recordSound(r, 'autoplay', autoBefore, after, (v) => { r.autoplay = v; e.target.checked = v; }, 'sound autoplay');
+        r.autoplay = after;
       });
     });
   }
