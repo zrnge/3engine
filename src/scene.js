@@ -231,7 +231,7 @@ export class SceneSerializer {
       throw new Error('Unsupported scene file (missing or wrong version).');
     }
 
-    // wipe current editable scene
+    // wipe current editable scene (preserve the editor grid)
     this.editor.select(null);
     // stop + drop all sounds before destroying objects so nodes detach cleanly
     this.engine.stopAllSounds();
@@ -240,6 +240,10 @@ export class SceneSerializer {
       if (typeof entity.destroy === 'function') entity.destroy(this.engine);
       else this.engine.remove(entity);
       this.editor.unregister(entity);
+    }
+    // ensure the editor grid stays in the scene
+    if (this.engine.grid && !this.engine.scene.children.includes(this.engine.grid)) {
+      this.engine.scene.add(this.engine.grid);
     }
 
     // rebuild entities (models load async; everything else is instant)

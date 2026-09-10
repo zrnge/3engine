@@ -37,6 +37,12 @@ export class Engine {
     this.physics = new PhysicsWorld();
     this.behaviors = [];       // { entity, fn } compiled behavior scripts
 
+    // editor reference grid — not part of the scene hierarchy / serialization
+    this.grid = new THREE.GridHelper(40, 40, 0x4dd0a6, 0x30363d);
+    this.grid.name = '__grid';
+    this.grid.position.y = 0;
+    this.scene.add(this.grid);
+
     this.mixers = [];          // { root, mixer, clips, actions, current, speed, loop }
 
     // sounds: each entity can have multiple sounds.
