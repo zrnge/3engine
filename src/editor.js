@@ -819,23 +819,33 @@ export class ObjectEditor {
       for (const axis of ['x', 'y', 'z']) {
         const field = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
         let axisBefore = target[axis];
-        field.addEventListener('focus', () => { axisBefore = target[axis]; });
+        let lastInput = target[axis] / conv;
+        field.addEventListener('focus', () => {
+          axisBefore = target[axis];
+          lastInput = target[axis] / conv;
+        });
         field.addEventListener('input', () => {
-          const v = parseFloat(field.value);
+          const raw = field.value;
+          if (raw === '' || raw === '-' || raw === '.') return; // allow partial typing
+          const v = parseFloat(raw);
           if (Number.isFinite(v)) {
+            lastInput = v;
             target[axis] = v * conv;
             this._helper.setFromObject(o);
             this.gizmo.updateMatrixWorld?.();
           }
         });
-        field.addEventListener('change', () => {
+        const commitAxis = () => {
           const after = target.clone();
-          target[axis] = axisBefore;
           const before = target.clone();
-          target.copy(after);
-          this._recordVector(target, before, after, `${key}.${axis}`);
+          before[axis] = axisBefore;
+          if (!before.equals(after)) {
+            this._recordVector(target, before, after, `${key}.${axis}`);
+          }
           axisBefore = target[axis];
-        });
+        };
+        field.addEventListener('change', commitAxis);
+        field.addEventListener('blur', commitAxis);
       }
     }
 
@@ -865,13 +875,17 @@ export class ObjectEditor {
   }
 
   _vecRow(key, label, v) {
-    const f = (n) => (Math.round(n * 100) / 100).toString();
+    const f = (n) => {
+      // keep enough precision for precise editing; trim trailing zeros
+      const s = n.toFixed(3);
+      return s.replace(/\.?0+$/, '');
+    };
     return `
       <div class="vec-row">
         <label>${label}</label>
-        <input id="insp-${key}-x" type="number" step="0.1" value="${f(v.x)}" />
-        <input id="insp-${key}-y" type="number" step="0.1" value="${f(v.y)}" />
-        <input id="insp-${key}-z" type="number" step="0.1" value="${f(v.z)}" />
+        <input id="insp-${key}-x" type="number" step="0.001" value="${f(v.x)}" />
+        <input id="insp-${key}-y" type="number" step="0.001" value="${f(v.y)}" />
+        <input id="insp-${key}-z" type="number" step="0.001" value="${f(v.z)}" />
       </div>`;
   }
 
@@ -1372,7 +1386,11 @@ export class ObjectEditor {
     const o = sel.object3D;
     const set = (key, axis, val) => {
       const el = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
-      if (el) el.value = (Math.round(val * 100) / 100).toString();
+      if (el) {
+        // preserve precision to 3 decimals, trimming trailing zeros
+        const s = val.toFixed(3).replace(/\.?0+$/, '');
+        el.value = s;
+      }
     };
     for (const a of ['x', 'y', 'z']) {
       set('pos', a, o.position[a]);
