@@ -9,6 +9,7 @@ import { SceneSerializer } from './scene.js';
 import { Entity } from './entity.js';
 import { Player } from './player.js';
 import { Coin } from './enemy.js';
+import { RigidBody } from './physics.js';
 
 // ---- engine ----
 const engine = new Engine({ background: 0x0b0e14 });
@@ -21,13 +22,15 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(6, 12, 8);
 scene.add(sun);
 
+// solid floor (box, not plane, so physics has real thickness and no tunneling)
 const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(30, 30),
+  new THREE.BoxGeometry(30, 1, 30),
   new THREE.MeshStandardMaterial({ color: 0x1a2233 })
 );
-ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.5;
 scene.add(ground);
 scene.add(new THREE.GridHelper(30, 30, 0x2b3a55, 0x22304a));
+// ground is wrapped as an entity after autosave restore so it survives scene reload
 
 // ---- camera rig: 1 orbit · 2 follow · 4 free ----
 const rig = new CameraRig(engine.camera, engine.renderer.domElement);
@@ -51,6 +54,7 @@ const editor = new ObjectEditor(engine, {
 const player = engine.add(new Player());
 player.object3D.userData.kind = 'Player';
 editor.register(player);
+
 function controlledEntity(p) {
   return p.target || p;
 }
@@ -682,21 +686,29 @@ engine.onUpdate = (dt, eng) => {
 refreshCamTargets();
 refreshControlTargets();
 
-// restore the last autosaved scene (if any) so a refresh loses nothing
+// restore the last autosaved scene (if any) so a refresh loses nothing, then add the runtime ground collider
 (async () => {
   try {
     const saved = localStorage.getItem(AUTOSAVE_KEY);
-    if (!saved) return;
-    const made = await serializer.deserialize(JSON.parse(saved));
-    if (made && made.length) {
-      history.clear();
-      refreshHistoryButtons();
-      refreshCamTargets();
-      console.log('[Tiny3] restored autosaved scene');
+    if (saved) {
+      const made = await serializer.deserialize(JSON.parse(saved));
+      if (made && made.length) {
+        history.clear();
+        refreshHistoryButtons();
+        refreshCamTargets();
+        console.log('[Tiny3] restored autosaved scene');
+      }
     }
   } catch (err) {
     console.warn('[Tiny3] autosave restore failed:', err);
   }
-})();
 
-engine.start();
+  // ground is a static physics collider, registered after autosave restore so it survives scene reloads
+  ground.name = 'Ground';
+  const groundEntity = new Entity(ground);
+  groundEntity.rigidBody = new RigidBody({ type: 'static' });
+  engine.add(groundEntity);
+  editor.register(groundEntity);
+
+  engine.start();
+})();

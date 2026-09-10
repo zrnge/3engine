@@ -125,6 +125,13 @@ export class SceneSerializer {
       rotation: v3(o.rotation),
       scale: v3(o.scale),
       solid: !!entity.solid,
+      rigidBody: entity.rigidBody ? {
+        type: entity.rigidBody.type,
+        mass: round(entity.rigidBody.mass),
+        restitution: round(entity.rigidBody.restitution),
+        friction: round(entity.rigidBody.friction),
+      } : undefined,
+      behavior: entity.behavior || undefined,
       parent: parentIdx,
     };
 
@@ -316,6 +323,17 @@ export class SceneSerializer {
     const applySolid = (entity) => {
       if (d.solid !== undefined) entity.solid = !!d.solid;
     };
+    const applyPhysics = async (entity) => {
+      if (d.rigidBody) {
+        const { RigidBody } = await import('./physics.js');
+        entity.rigidBody = new RigidBody(d.rigidBody);
+        this.engine.physics.register(entity);
+      }
+      if (d.behavior) {
+        entity.behavior = d.behavior;
+        this.engine.addBehavior(entity, d.behavior);
+      }
+    };
 
     switch (d.type) {
       case 'light': {
@@ -328,12 +346,14 @@ export class SceneSerializer {
         }
         const entity = new LightEntity(light, d.name || 'Light');
         applySolid(entity);
+        await applyPhysics(entity);
         await this._attachSounds(entity, d.sounds);
         return entity;
       }
       case 'player': {
         apply(this.player.object3D);
         applySolid(this.player);
+        await applyPhysics(this.player);
         await this._attachSounds(this.player, d.sounds);
         return this.player;
       }
@@ -342,6 +362,7 @@ export class SceneSerializer {
         apply(coin.object3D);
         coin.object3D.userData.kind = 'Coin';
         applySolid(coin);
+        await applyPhysics(coin);
         await this._attachSounds(coin, d.sounds);
         return coin;
       }
@@ -352,6 +373,7 @@ export class SceneSerializer {
         obj.userData.kind = 'Prop';
         const entity = new Entity(obj);
         applySolid(entity);
+        await applyPhysics(entity);
         await this._attachSounds(entity, d.sounds);
         return entity;
       }
@@ -372,6 +394,7 @@ export class SceneSerializer {
         mesh.userData.kind = 'Prop';
         const entity = new Entity(mesh);
         applySolid(entity);
+        await applyPhysics(entity);
         await this._attachSounds(entity, d.sounds);
         return entity;
       }

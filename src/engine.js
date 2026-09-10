@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Input } from './input.js';
+import { PhysicsWorld } from './physics.js';
 
 /**
  * Engine — core game loop, renderer, scene and entity management.
@@ -33,6 +34,9 @@ export class Engine {
     this.time = 0;
 
     // animation + audio registries (editor features)
+    this.physics = new PhysicsWorld();
+    this.behaviors = [];       // { entity, fn } compiled behavior scripts
+
     this.mixers = [];          // { root, mixer, clips, actions, current, speed, loop }
 
     // sounds: each entity can have multiple sounds.
@@ -58,6 +62,7 @@ export class Engine {
   add(entity) {
     this.entities.push(entity);
     this.scene.add(entity.object3D);
+    this.physics.register(entity);
     if (typeof entity.start === 'function') entity.start(this);
     return entity;
   }
@@ -65,6 +70,8 @@ export class Engine {
   remove(entity) {
     const i = this.entities.indexOf(entity);
     if (i !== -1) this.entities.splice(i, 1);
+    this.physics.unregister(entity);
+    this.removeBehavior(entity);
     this.scene.remove(entity.object3D);
   }
 
@@ -78,8 +85,21 @@ export class Engine {
     const dt = Math.min(this._clock.getDelta(), 0.1); // clamp huge frames (tab switch)
     if (!this.paused) {
       this.time += dt;
+      // advance physics first so bodies are in a valid state for gameplay code
+      this.physics.step(dt, this);
       for (const entity of this.entities) {
         if (typeof entity.update === 'function') entity.update(dt, this);
+      }
+      // run behavior scripts in play mode
+      for (const b of this.behaviors) {
+        try {
+          b.scope.delta = dt;
+          b.scope.time = this.time;
+          b.scope.keys = this.input.keyState;
+          b.fn.call(b.scope, dt, this.time);
+        } catch (err) {
+          console.error('[Tiny3 behavior]', b.entity.object3D.name, err.message);
+        }
       }
       // advance animations + fade positional audio
       for (const m of this.mixers) m.mixer.update(dt * (m.speed ?? 1));
@@ -107,6 +127,32 @@ export class Engine {
    * @param {number} [opts.refDistance=5]
    * @param {string|null} [opts.trigger=null]  // 'fire' etc. for action sounds
    */
+  addBehavior(entity, code) {
+    this.removeBehavior(entity);
+    if (!code || !code.trim()) return;
+    const scope = {
+      entity: entity.object3D,
+      engine: this,
+      get delta() { return 0; }, // replaced each frame
+      get time() { return 0; },
+      get keys() { return {}; },
+      fire: () => this.playEntitySounds(entity, { trigger: 'fire' }),
+      log: (...args) => console.log('[behavior]', entity.object3D.name, ...args),
+    };
+    const fn = new Function('dt', 'time', `
+      const __keys = this.keys;
+      const __fire = () => this.fire();
+      const __log = (...a) => this.log(...a);
+      ${code}
+    `);
+    this.behaviors.push({ entity, code, fn, scope });
+  }
+
+  removeBehavior(entity) {
+    const i = this.behaviors.findIndex((b) => b.entity === entity);
+    if (i !== -1) this.behaviors.splice(i, 1);
+  }
+
   addSound(entity, buffer, opts = {}) {
     const type = opts.type || 'positional';
     const name = opts.name || 'sound';

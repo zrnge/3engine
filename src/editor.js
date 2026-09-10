@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { Entity } from './entity.js';
+import { RigidBody, BODY_TYPES } from './physics.js';
 
 const DEG = 180 / Math.PI;
 const RAD = Math.PI / 180;
@@ -74,6 +75,7 @@ export class ObjectEditor {
     this._clipboard = null; // JSON string for copy/paste
     this.snap = { translate: 0, rotate: 0, scale: 0 }; // 0 = off
     this.gizmoSensitivity = 0.25;
+    this._dragStart = null; // transform snapshot for undoing gizmo drags
     this._gizmoBase = null; // transform at drag start
     this._gizmoBaseMulti = null; // Map entity -> transform at drag start
 
@@ -749,7 +751,7 @@ export class ObjectEditor {
     this._renderStatus();
   }
 
-  /** Stop + drop any animation mixer / positional audio bound to an entity. */
+  /** Stop + drop any animation mixer / positional audio / behavior bound to an entity. */
   _cleanupEntityMedia(entity) {
     const mi = this.engine.mixers.findIndex((m) => m.root === entity.object3D);
     if (mi !== -1) {
@@ -758,6 +760,7 @@ export class ObjectEditor {
     }
     this._clearSound(entity);
     this._clearSolidHelper(entity);
+    this.engine.removeBehavior(entity);
   }
 
   /** Show/hide a red wireframe box around solid entities. */
@@ -918,8 +921,10 @@ export class ObjectEditor {
         ${this._vecRow('rot', 'Rotation°', { x: o.rotation.x * DEG, y: o.rotation.y * DEG, z: o.rotation.z * DEG })}
         ${isLight ? '' : this._vecRow('scl', 'Scale', o.scale)}
         <label class="check-row"><input type="checkbox" id="insp-solid" ${sel.solid ? 'checked' : ''}/> Solid (blocks player)</label>
+        ${this._physicsSection(sel)}
         ${isLight ? this._lightSection(o) : ''}
         ${mesh ? this._materialSection(mesh) : ''}
+        ${this._behaviorSection(sel)}
         ${this._animationSection(sel)}
         ${this._audioSection(sel)}
         <div class="insp-row">
@@ -1018,6 +1023,8 @@ export class ObjectEditor {
 
     if (isLight) this._wireLightSection(o);
     if (mesh) this._wireMaterialSection(mesh);
+    this._wirePhysicsSection(sel);
+    this._wireBehaviorSection(sel);
     this._wireAnimationSection(sel);
     this._wireAudioSection(sel);
 
@@ -1051,6 +1058,173 @@ export class ObjectEditor {
       html += `<option value="${i}"${selected}>${name}</option>`;
     }
     return html;
+  }
+
+  // ---------- physics ----------
+
+  _physicsSection(entity) {
+    const body = entity.rigidBody;
+    const type = body?.type || 'static';
+    const mass = body?.mass ?? 1;
+    const restitution = body?.restitution ?? 0;
+    const friction = body?.friction ?? 0.5;
+    const hasBody = !!body;
+    return `
+      <h4 class="insp-h">Physics</h4>
+      <label class="check-row"><input type="checkbox" id="insp-rb-enable" ${hasBody ? 'checked' : ''}/> Enable rigid body</label>
+      <div class="prop-row"><label>Type</label>
+        <select id="insp-rb-type" ${hasBody ? '' : 'disabled'}>
+          ${BODY_TYPES.map((t) => `<option value="${t}" ${type === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select></div>
+      <div class="prop-row"><label>Mass</label>
+        <input type="number" id="insp-rb-mass" value="${mass}" step="0.1" ${hasBody ? '' : 'disabled'} /></div>
+      <div class="prop-row"><label>Restitution</label>
+        <input type="range" id="insp-rb-rest" min="0" max="1" step="0.05" value="${restitution}" ${hasBody ? '' : 'disabled'} />
+        <span class="val" id="insp-rb-rest-v">${restitution.toFixed(2)}</span></div>
+      <div class="prop-row"><label>Friction</label>
+        <input type="range" id="insp-rb-fric" min="0" max="1" step="0.05" value="${friction}" ${hasBody ? '' : 'disabled'} />
+        <span class="val" id="insp-rb-fric-v">${friction.toFixed(2)}</span></div>`;
+  }
+
+  _wirePhysicsSection(entity) {
+    const q = (s) => this.inspectorEl.querySelector(s);
+    const enable = q('#insp-rb-enable');
+    const typeSel = q('#insp-rb-type');
+    const massIn = q('#insp-rb-mass');
+    const rest = q('#insp-rb-rest');
+    const fric = q('#insp-rb-fric');
+
+    const updateUI = (enabled) => {
+      typeSel.disabled = !enabled;
+      massIn.disabled = !enabled;
+      rest.disabled = !enabled;
+      fric.disabled = !enabled;
+    };
+
+    enable.addEventListener('change', () => {
+      const after = enable.checked;
+      this._recordValue(entity, 'rigidBody', entity.rigidBody, after ? new RigidBody() : null, (v) => {
+        entity.rigidBody = v;
+        if (v) this.engine.physics.register(entity);
+        else this.engine.physics.unregister(entity);
+        this._renderInspector();
+      }, 'rigid body');
+      if (after) {
+        entity.rigidBody = new RigidBody();
+        this.engine.physics.register(entity);
+      } else {
+        this.engine.physics.unregister(entity);
+        entity.rigidBody = null;
+      }
+      updateUI(after);
+    });
+
+    typeSel.addEventListener('change', () => {
+      if (!entity.rigidBody) return;
+      const before = entity.rigidBody.type;
+      const after = typeSel.value;
+      this._recordValue(entity.rigidBody, 'type', before, after, (v) => {
+        entity.rigidBody.type = v;
+        entity.rigidBody.invMass = v === 'dynamic' ? 1 / entity.rigidBody.mass : 0;
+      }, 'physics type');
+      entity.rigidBody.type = after;
+      entity.rigidBody.invMass = after === 'dynamic' ? 1 / entity.rigidBody.mass : 0;
+    });
+
+    let massBefore = entity.rigidBody?.mass ?? 1;
+    massIn.addEventListener('input', () => {
+      if (!entity.rigidBody) return;
+      const v = Math.max(0.001, parseFloat(massIn.value) || 0.001);
+      entity.rigidBody.mass = v;
+      entity.rigidBody.invMass = entity.rigidBody.type === 'dynamic' ? 1 / v : 0;
+    });
+    massIn.addEventListener('change', () => {
+      if (!entity.rigidBody) return;
+      const after = entity.rigidBody.mass;
+      this._recordValue(entity.rigidBody, 'mass', massBefore, after, (v) => {
+        entity.rigidBody.mass = v;
+        entity.rigidBody.invMass = entity.rigidBody.type === 'dynamic' ? 1 / v : 0;
+        massIn.value = v;
+      }, 'physics mass');
+      massBefore = after;
+    });
+
+    let restBefore = entity.rigidBody?.restitution ?? 0;
+    rest.addEventListener('input', () => {
+      if (!entity.rigidBody) return;
+      entity.rigidBody.restitution = parseFloat(rest.value);
+      q('#insp-rb-rest-v').textContent = entity.rigidBody.restitution.toFixed(2);
+    });
+    rest.addEventListener('change', () => {
+      if (!entity.rigidBody) return;
+      const after = entity.rigidBody.restitution;
+      this._recordValue(entity.rigidBody, 'restitution', restBefore, after, (v) => {
+        entity.rigidBody.restitution = v;
+        rest.value = v;
+        q('#insp-rb-rest-v').textContent = v.toFixed(2);
+      }, 'physics restitution');
+      restBefore = after;
+    });
+
+    let fricBefore = entity.rigidBody?.friction ?? 0.5;
+    fric.addEventListener('input', () => {
+      if (!entity.rigidBody) return;
+      entity.rigidBody.friction = parseFloat(fric.value);
+      q('#insp-rb-fric-v').textContent = entity.rigidBody.friction.toFixed(2);
+    });
+    fric.addEventListener('change', () => {
+      if (!entity.rigidBody) return;
+      const after = entity.rigidBody.friction;
+      this._recordValue(entity.rigidBody, 'friction', fricBefore, after, (v) => {
+        entity.rigidBody.friction = v;
+        fric.value = v;
+        q('#insp-rb-fric-v').textContent = v.toFixed(2);
+      }, 'physics friction');
+      fricBefore = after;
+    });
+  }
+
+  // ---------- behavior / scripting ----------
+
+  _behaviorSection(entity) {
+    const code = entity.behavior || '';
+    return `
+      <h4 class="insp-h">Behavior</h4>
+      <textarea id="insp-behavior" spellcheck="false" placeholder="// runs every frame in Play mode\n// this.entity, this.engine, this.delta, this.time, this.keys, this.fire()">${this._escapeHtml(code)}</textarea>
+      <div class="insp-row">
+        <button class="tbtn" id="insp-behavior-apply">Apply</button>
+        <button class="tbtn danger" id="insp-behavior-clear">Clear</button>
+      </div>`;
+  }
+
+  _escapeHtml(str) {
+    return str.replace(/\u0026/g, '\u0026amp;').replace(/\u003c/g, '\u0026lt;').replace(/\u003e/g, '\u0026gt;');
+  }
+
+  _wireBehaviorSection(entity) {
+    const q = (s) => this.inspectorEl.querySelector(s);
+    const ta = q('#insp-behavior');
+    let before = entity.behavior || '';
+    const apply = () => {
+      const after = ta.value;
+      this._recordValue(entity, 'behavior', before, after, (v) => {
+        entity.behavior = v || null;
+        ta.value = v || '';
+      }, 'behavior');
+      entity.behavior = after || null;
+      before = after;
+      this.engine.addBehavior(entity, after);
+    };
+    q('#insp-behavior-apply').addEventListener('click', apply);
+    q('#insp-behavior-clear').addEventListener('click', () => {
+      this._recordValue(entity, 'behavior', before, '', (v) => {
+        entity.behavior = v || null;
+        ta.value = v || '';
+      }, 'behavior');
+      entity.behavior = null;
+      before = '';
+      this.engine.removeBehavior(entity);
+    });
   }
 
   // ---------- lights ----------

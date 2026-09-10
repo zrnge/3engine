@@ -9,6 +9,8 @@ export class Entity {
     this.object3D = object3D;
     this.alive = true;
     this.solid = false; // if true, player cannot walk through this object
+    this.rigidBody = null; // physics body (see physics.js)
+    this.behavior = null; // script string
     this.parent = null; // Entity or null
     this.children = []; // Entity[]
   }
@@ -55,8 +57,17 @@ export class Entity {
     for (let i = this.children.length - 1; i >= 0; i--) {
       this.children[i].destroy(engine);
     }
+    this._clearSolidHelper();
     if (this.parent) this.setParent(null, engine);
     else engine.remove(this);
+  }
+
+  _clearSolidHelper() {
+    const helper = this.object3D.userData.__solidHelper;
+    if (helper) {
+      helper.parent?.remove(helper);
+      delete this.object3D.userData.__solidHelper;
+    }
   }
 }
 

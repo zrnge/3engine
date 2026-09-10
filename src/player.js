@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Entity, getWorldHalfSize } from './entity.js';
+import { RigidBody } from './physics.js';
 
 const GRAVITY = -24;
 const GROUND_Y = 0.5; // half the cube height
@@ -29,10 +30,11 @@ export class Player extends Entity {
     const material = new THREE.MeshStandardMaterial({ color: 0x4dd0a6 });
     super(new THREE.Mesh(geometry, material));
     this.object3D.name = 'Player';
-    this.object3D.position.set(0, GROUND_Y, 0);
+    this.object3D.position.set(0, 1.5, 0);
     this.velocityY = 0;
     this.grounded = true;
     this.halfSize = new THREE.Vector3(0.5, 0.5, 0.5);
+    this.rigidBody = new RigidBody({ type: 'dynamic', mass: 70, friction: 0.1, gravity: -24, restitution: 0 });
 
     // ---- user-adjustable control settings ----
     this.enabled = true;
@@ -75,7 +77,9 @@ export class Player extends Entity {
     if (!this.enabled) return;
     const input = engine.input;
     const object3D = this.controlledObject;
-    const pos = object3D.position;
+    const body = object3D.userData.body || this.rigidBody;
+    if (!body || body.type !== 'dynamic') return;
+
     const fpsMode = engine.cameraRig?.mode === 'fps';
 
     let dx = 0, dz = 0;
@@ -85,19 +89,21 @@ export class Player extends Entity {
     if (this._held(input, 'back')) dz += 1;
 
     if (dx !== 0 || dz !== 0) {
-      // rotate input into camera space in fps mode
       const yaw = fpsMode ? engine.cameraRig.yaw : 0;
       const rx = dx * Math.cos(yaw) - dz * Math.sin(yaw);
       const rz = dx * Math.sin(yaw) + dz * Math.cos(yaw);
       const len = Math.hypot(rx, rz);
-      const vx = (rx / len) * this.speed * dt;
-      const vz = (rz / len) * this.speed * dt;
-
-      // try X movement, then Z, sliding along solid walls
-      pos.x = THREE.MathUtils.clamp(pos.x + vx, -BOUND, BOUND);
-      this._resolveSolidCollision(engine, pos);
-      pos.z = THREE.MathUtils.clamp(pos.z + vz, -BOUND, BOUND);
-      this._resolveSolidCollision(engine, pos);
+      const targetSpeed = this.speed;
+      const accel = this.speed * 6 * dt;
+      body.velocity.x += (rx / len) * accel;
+      body.velocity.z += (rz / len) * accel;
+      // clamp horizontal speed
+      const hs = Math.hypot(body.velocity.x, body.velocity.z);
+      if (hs > targetSpeed) {
+        const scale = targetSpeed / hs;
+        body.velocity.x *= scale;
+        body.velocity.z *= scale;
+      }
 
       if (!fpsMode && this.rotateToMovement) {
         object3D.rotation.y = Math.atan2(rx, rz);
@@ -105,57 +111,17 @@ export class Player extends Entity {
     }
 
     if (fpsMode) {
-      object3D.rotation.y = engine.cameraRig.yaw; // body faces look direction
+      object3D.rotation.y = engine.cameraRig.yaw;
     }
 
-    if (this._pressed(input, 'jump') && this.grounded) {
-      this.velocityY = this.jumpVelocity;
-      this.grounded = false;
+    if (this._pressed(input, 'jump') && body.grounded) {
+      body.velocity.y = this.jumpVelocity;
+      body.grounded = false;
       if (typeof this.onJump === 'function') this.onJump(this, engine);
     }
 
     if (this._pressed(input, 'fire')) {
       if (typeof this.onFire === 'function') this.onFire(this, engine);
-    }
-
-    this.velocityY += GRAVITY * dt;
-    pos.y += this.velocityY * dt;
-    if (pos.y <= GROUND_Y) {
-      pos.y = GROUND_Y;
-      this.velocityY = 0;
-      this.grounded = true;
-    }
-  }
-
-  /** Push the player out of any solid entity's world AABB (axis-separated, so we slide). */
-  _resolveSolidCollision(engine, pos) {
-    const object3D = this.controlledObject;
-    const playerBox = new THREE.Box3().setFromObject(object3D);
-    const playerCenter = new THREE.Vector3();
-    const playerSize = new THREE.Vector3();
-    playerBox.getCenter(playerCenter);
-    playerBox.getSize(playerSize);
-    const pHalf = playerSize.multiplyScalar(0.5);
-
-    for (const entity of engine.entities) {
-      if (!entity || entity === this || entity === this.target || !entity.solid) continue;
-      const { center, halfSize } = getWorldHalfSize(entity.object3D);
-
-      // only block horizontal movement when vertically overlapping
-      const overlapY = pHalf.y + halfSize.y - Math.abs(playerCenter.y - center.y);
-      if (overlapY <= 0) continue;
-
-      const overlapX = pHalf.x + halfSize.x - Math.abs(pos.x - center.x);
-      const overlapZ = pHalf.z + halfSize.z - Math.abs(pos.z - center.z);
-
-      if (overlapX > 0 && overlapZ > 0) {
-        // resolve the smaller axis overlap so we slide along walls
-        if (overlapX < overlapZ) {
-          pos.x = center.x + (pos.x > center.x ? 1 : -1) * (pHalf.x + halfSize.x);
-        } else {
-          pos.z = center.z + (pos.z > center.z ? 1 : -1) * (pHalf.z + halfSize.z);
-        }
-      }
     }
   }
 }
