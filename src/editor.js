@@ -1449,13 +1449,19 @@ export class ObjectEditor {
       .concat(clips.map((c, i) =>
         `<option value="${i}" ${String(i) === String(cur) ? 'selected' : ''}>${c.name || 'clip ' + i}</option>`))
       .join('');
+    const playing = rec?.current !== null && rec?.current !== undefined && rec.actions[rec.current]?.isRunning();
     return `
       <h4 class="insp-h">Animation</h4>
       <div class="prop-row"><label>Clip</label><select id="insp-anim">${opts}</select></div>
+      <div class="insp-row" style="margin-top:4px; margin-bottom:8px">
+        <button class="tbtn" id="insp-anim-play">${playing ? '⏸ Pause' : '▶ Play'}</button>
+        <button class="tbtn" id="insp-anim-stop">⏹ Stop</button>
+      </div>
       <div class="prop-row"><label>Speed</label>
         <input type="range" id="insp-anim-speed" min="0" max="3" step="0.05" value="${rec?.speed ?? 1}" />
         <span class="val" id="insp-anim-speed-v">${(rec?.speed ?? 1).toFixed(2)}</span></div>
-      <label class="check-row"><input type="checkbox" id="insp-anim-loop" ${rec?.loop !== false ? 'checked' : ''}/> Loop</label>`;
+      <label class="check-row"><input type="checkbox" id="insp-anim-loop" ${rec?.loop !== false ? 'checked' : ''}/> Loop</label>
+      <label class="check-row"><input type="checkbox" id="insp-anim-auto" ${rec?.autoplay ? 'checked' : ''}/> Autoplay</label>`;
   }
 
   _wireAnimationSection(entity) {
@@ -1464,26 +1470,52 @@ export class ObjectEditor {
     const rec = this._mixerFor(entity);
     const q = (s) => this.inspectorEl.querySelector(s);
 
-    const play = (idx) => {
+    const play = (idx, fromStart = true) => {
       // stop current
       if (rec.current !== null && rec.actions[rec.current]) {
         rec.actions[rec.current].fadeOut(0.15);
       }
-      if (idx === '' || idx === null) { rec.current = null; return; }
+      if (idx === '' || idx === null) { rec.current = null; this._renderInspector(); return; }
       const i = Number(idx);
       let action = rec.actions[i];
       if (!action) {
         action = rec.mixer.clipAction(rec.clips[i]);
         rec.actions[i] = action;
       }
-      action.reset();
+      if (fromStart) action.reset();
       action.setLoop(rec.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
       action.clampWhenFinished = !rec.loop;
       action.fadeIn(0.15).play();
       rec.current = i;
+      this._renderInspector();
+    };
+
+    const pause = () => {
+      const a = rec.current !== null ? rec.actions[rec.current] : null;
+      if (a) a.paused ? a.play() : a.stop(); // toggle
+      this._renderInspector();
+    };
+
+    const stop = () => {
+      if (rec.current !== null && rec.actions[rec.current]) {
+        rec.actions[rec.current].stop();
+      }
+      rec.current = null;
+      this._renderInspector();
     };
 
     sel.addEventListener('change', () => play(sel.value));
+
+    q('#insp-anim-play').addEventListener('click', () => {
+      if (rec.current !== null && rec.actions[rec.current]?.isRunning()) {
+        rec.actions[rec.current].paused = !rec.actions[rec.current].paused;
+      } else {
+        play(sel.value || 0);
+      }
+      this._renderInspector();
+    });
+
+    q('#insp-anim-stop').addEventListener('click', stop);
 
     const speed = q('#insp-anim-speed');
     speed.addEventListener('input', () => {
@@ -1499,6 +1531,15 @@ export class ObjectEditor {
         a.clampWhenFinished = !rec.loop;
       }
     });
+
+    q('#insp-anim-auto').addEventListener('change', (e) => {
+      rec.autoplay = e.target.checked;
+    });
+
+    // if autoplay is set and nothing is playing, start the first clip
+    if (rec.autoplay && rec.current === null && rec.clips.length) {
+      play(0);
+    }
   }
 
   // ---------- audio (multiple sounds per entity) ----------

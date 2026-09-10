@@ -102,7 +102,13 @@ export class Engine {
         }
       }
       // advance animations + fade positional audio
-      for (const m of this.mixers) m.mixer.update(dt * (m.speed ?? 1));
+      for (const m of this.mixers) {
+        m.mixer.update(dt * (m.speed ?? 1));
+        // autoplay in editor mode when a clip is selected but not running
+        if (m.autoplay && m.current !== null && m.actions[m.current] && !m.actions[m.current].isRunning()) {
+          m.actions[m.current].reset().play();
+        }
+      }
       if (this.onUpdate) this.onUpdate(dt, this);
     }
     this.renderer.render(this.scene, this.camera);

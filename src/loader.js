@@ -2,6 +2,36 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /**
+ * Rebind animation clips from the original glTF scene to a cloned scene.
+ * THREE.clone() creates new UUIDs, but GLTFLoader animation tracks reference
+ * the original object UUIDs. This helper maps old UUIDs to the matching cloned
+ * nodes by traversal order (which clone preserves) and rewrites track names.
+ */
+function rebindClips(clips, oldRoot, newRoot) {
+  if (!clips || !clips.length) return [];
+  const oldNodes = [];
+  oldRoot.traverse((o) => oldNodes.push(o));
+  const newNodes = [];
+  newRoot.traverse((o) => newNodes.push(o));
+  const uuidMap = new Map();
+  for (let i = 0; i < oldNodes.length && i < newNodes.length; i++) {
+    uuidMap.set(oldNodes[i].uuid, newNodes[i]);
+  }
+  return clips.map((clip) => {
+    const newClip = clip.clone();
+    for (const track of newClip.tracks) {
+      const dot = track.name.indexOf('.');
+      const oldUuid = dot === -1 ? track.name : track.name.slice(0, dot);
+      const newObj = uuidMap.get(oldUuid);
+      if (newObj) {
+        track.name = newObj.uuid + track.name.slice(dot);
+      }
+    }
+    return newClip;
+  });
+}
+
+/**
  * AssetLoader — loads GLB/GLTF models into the scene.
  *
  *   const assets = new AssetLoader();
@@ -55,7 +85,8 @@ export class AssetLoader {
     root.position.set(position[0], position[1], position[2]);
     root.userData.assetUrl = url;
     // keep the animation clips so the editor can play them
-    root.userData.animations = gltf.animations || [];
+    // rebind tracks to the cloned hierarchy so the mixer can find the targets
+    root.userData.animations = rebindClips(gltf.animations || [], gltf.scene, model);
     return root;
   }
 
