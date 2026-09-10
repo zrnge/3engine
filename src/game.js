@@ -172,6 +172,49 @@ window.addEventListener('keydown', _unlock, { once: false });
 // ---- draggable panels (drag any panel by its header) ----
 document.querySelectorAll('.panel').forEach((p) => makeDraggable(p));
 
+// ---- asset browser: prefabs and reusable assets ----
+const assetList = document.getElementById('asset-list');
+const btnSavePrefab = document.getElementById('btn-save-prefab');
+
+function renderAssetBrowser() {
+  if (!assetList) return;
+  const names = editor.listPrefabs();
+  assetList.innerHTML = '';
+  if (!names.length) {
+    assetList.innerHTML = '<li class="empty">No prefabs yet.</li>';
+    return;
+  }
+  for (const name of names) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="ico">◆</span><span class="nm">${name}</span><span class="del" title="Delete prefab">×</span>`;
+    li.querySelector('.nm').addEventListener('click', () => {
+      const created = editor.instantiatePrefab(name);
+      if (created) markDirty();
+    });
+    li.querySelector('.del').addEventListener('click', (e) => {
+      e.stopPropagation();
+      editor.deletePrefab(name);
+      renderAssetBrowser();
+    });
+    assetList.appendChild(li);
+  }
+}
+
+if (btnSavePrefab) {
+  btnSavePrefab.addEventListener('click', () => {
+    const sel = editor.selected;
+    if (!sel) { alert('Select an object first.'); return; }
+    const name = prompt('Prefab name:', sel.object3D.name || 'Prefab');
+    if (!name) return;
+    if (editor.saveAsPrefab(name)) {
+      renderAssetBrowser();
+      markDirty();
+    }
+  });
+}
+
+renderAssetBrowser();
+
 // ---- toolbar wiring ----
 function setCamMode(mode) {
   if (mode === 'orbit') { rig.setMode('orbit', { target: rig.target }); input.exitPointerLock(); }
@@ -522,6 +565,13 @@ undoBtn.addEventListener('click', () => history.undo());
 redoBtn.addEventListener('click', () => history.redo());
 document.getElementById('btn-copy').addEventListener('click', () => editor.copySelection());
 document.getElementById('btn-paste').addEventListener('click', () => editor.pasteSelection());
+// refresh asset browser after paste so any newly pasted objects can be saved as prefabs
+const origPasteSelection = editor.pasteSelection.bind(editor);
+editor.pasteSelection = function () {
+  const result = origPasteSelection();
+  renderAssetBrowser();
+  return result;
+};
 document.getElementById('btn-save').addEventListener('click', () => serializer.saveToFile());
 const exporter = new GameExporter(serializer);
 document.getElementById('btn-export')?.addEventListener('click', () => exporter.exportToFile());

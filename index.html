@@ -62,6 +62,20 @@
     #hierarchy .add-row { display: flex; gap: 4px; padding: 8px 10px 4px; flex-wrap: wrap; }
     #hierarchy .add-row .tbtn { border: 1px solid var(--border); padding: 3px 8px; font-size: 12px; }
     #scene-list { list-style: none; margin: 4px 0 0; padding: 0; }
+
+    /* ---- asset browser (left, below camera panel) ---- */
+    #asset-browser { top: calc(64px + min(46vh, calc(100vh - 320px)) + min(34vh, calc(100vh - 300px)) + 20px); left: 10px; width: 210px; max-height: min(30vh, calc(100vh - 200px)); overflow-y: auto; padding-bottom: 10px; z-index: 10; }
+    #asset-browser .body { padding: 8px 12px; }
+    #asset-list { list-style: none; margin: 0; padding: 0; }
+    #asset-list li {
+      padding: 5px 10px; cursor: pointer; display: flex; align-items: center; gap: 7px;
+      border-bottom: 1px solid var(--border); color: var(--text);
+    }
+    #asset-list li:hover { background: var(--accent-dim); }
+    #asset-list li .ico { color: var(--dim); font-size: 11px; width: 14px; text-align: center; }
+    #asset-list li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #asset-list li .del { color: var(--dim); font-size: 14px; padding: 0 4px; }
+    #asset-list li .del:hover { color: #f85149; }
     #scene-list li {
       padding: 5px 12px; cursor: pointer; display: flex; align-items: center; gap: 7px;
       border-left: 3px solid transparent; color: var(--text);
@@ -137,6 +151,7 @@
     #btn-play.playing { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
     body.playing #hierarchy,
     body.playing #camera-panel,
+    body.playing #asset-browser,
     body.playing #inspector,
     body.playing #controls-panel { opacity: 0.45; pointer-events: none; }
     body.playing .gizmo-btn,
@@ -202,6 +217,17 @@
       <button class="tbtn" data-light="ambient">◌ Amb</button>
     </div>
     <ul id="scene-list"></ul>
+  </div>
+
+  <!-- asset browser: prefabs and reusable assets -->
+  <div id="asset-browser" class="panel">
+    <h3>Asset Browser</h3>
+    <div class="body">
+      <div class="insp-row" style="margin-bottom:8px">
+        <button class="tbtn" id="btn-save-prefab" title="Save selected object as a reusable prefab">💾 Prefab</button>
+      </div>
+      <ul id="asset-list"><li class="empty">No prefabs yet.</li></ul>
+    </div>
   </div>
 
   <!-- camera settings: tie the camera to any object -->

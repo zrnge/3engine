@@ -73,6 +73,7 @@ export class ObjectEditor {
     this._dragStart = null; // transform snapshot for undoing gizmo drags
     this._dragStartMulti = null; // Map entity -> snapshot for multi-select gizmo drags
     this._clipboard = null; // JSON string for copy/paste
+    this._propsClipboard = null; // property snapshot for copy/paste props
     this.snap = { translate: 0, rotate: 0, scale: 0 }; // 0 = off
     this.gizmoSensitivity = 0.25;
     this._dragStart = null; // transform snapshot for undoing gizmo drags
@@ -741,6 +742,240 @@ export class ObjectEditor {
     return entity;
   }
 
+  // ---------- prefabs / reusable assets ----------
+
+  static PREFAB_KEY = 'tiny3.prefabs';
+
+  listPrefabs() {
+    try {
+      const raw = localStorage.getItem(ObjectEditor.PREFAB_KEY);
+      return raw ? Object.keys(JSON.parse(raw)) : [];
+    } catch (err) {
+      console.warn('[Tiny3] failed to list prefabs', err);
+      return [];
+    }
+  }
+
+  saveAsPrefab(name) {
+    const target = this._primarySelection();
+    if (!target) return false;
+    const rec = this._serializeForPrefab(target);
+    try {
+      const raw = localStorage.getItem(ObjectEditor.PREFAB_KEY) || '{}';
+      const store = JSON.parse(raw);
+      store[name] = rec;
+      localStorage.setItem(ObjectEditor.PREFAB_KEY, JSON.stringify(store));
+      return true;
+    } catch (err) {
+      console.warn('[Tiny3] failed to save prefab', err);
+      return false;
+    }
+  }
+
+  deletePrefab(name) {
+    try {
+      const raw = localStorage.getItem(ObjectEditor.PREFAB_KEY) || '{}';
+      const store = JSON.parse(raw);
+      delete store[name];
+      localStorage.setItem(ObjectEditor.PREFAB_KEY, JSON.stringify(store));
+      return true;
+    } catch (err) {
+      console.warn('[Tiny3] failed to delete prefab', err);
+      return false;
+    }
+  }
+
+  instantiatePrefab(name) {
+    try {
+      const raw = localStorage.getItem(ObjectEditor.PREFAB_KEY) || '{}';
+      const store = JSON.parse(raw);
+      const rec = store[name];
+      if (!rec) return null;
+      const entity = this._deserializeFromPrefab(rec);
+      if (!entity) return null;
+      this.engine.add(entity);
+      this.register(entity);
+      this._recordAddRemove(entity, true);
+      this.select(entity);
+      return entity;
+    } catch (err) {
+      console.warn('[Tiny3] failed to instantiate prefab', err);
+      return null;
+    }
+  }
+
+  _serializeForPrefab(entity) {
+    const o = entity.object3D;
+    const rec = {
+      name: o.name,
+      position: { x: 0, y: o.position.y, z: 0 },
+      rotation: { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z },
+      scale: { x: o.scale.x, y: o.scale.y, z: o.scale.z },
+      solid: entity.solid,
+      kind: o.userData.kind,
+    };
+    if (o.isLight) {
+      rec.light = {
+        type: o.isDirectionalLight ? 'directional' : o.isPointLight ? 'point' : o.isSpotLight ? 'spot' : 'ambient',
+        color: '#' + o.color.getHexString(),
+        intensity: o.intensity,
+        castShadow: !!o.castShadow,
+      };
+      if (o.distance !== undefined) rec.light.distance = o.distance;
+      if (o.angle !== undefined) rec.light.angle = o.angle;
+      if (o.penumbra !== undefined) rec.light.penumbra = o.penumbra;
+    }
+    const mesh = this._firstMesh(o);
+    if (mesh && mesh.material && mesh.material.isMeshStandardMaterial) {
+      const m = mesh.material;
+      rec.material = {
+        color: '#' + m.color.getHexString(),
+        metalness: m.metalness,
+        roughness: m.roughness,
+        opacity: m.opacity,
+        wireframe: !!m.wireframe,
+      };
+    }
+    if (o.userData.assetUrl) rec.assetUrl = o.userData.assetUrl;
+    if (o.geometry && !rec.assetUrl) {
+      const kind = primitiveKind(o.geometry);
+      if (kind) rec.primitive = kind;
+    }
+    if (entity.behavior) rec.behavior = entity.behavior;
+    if (entity.rigidBody) {
+      rec.rigidBody = {
+        type: entity.rigidBody.type,
+        mass: entity.rigidBody.mass,
+        restitution: entity.rigidBody.restitution,
+        friction: entity.rigidBody.friction,
+      };
+    }
+    return rec;
+  }
+
+  _deserializeFromPrefab(rec) {
+    // Reuse clipboard deserializer but reset X/Z position so it spawns at origin plane
+    const entity = this._deserializeFromClipboard(rec);
+    if (!entity) return null;
+    entity.object3D.position.set(0, rec.position.y, 0);
+    entity.object3D.name = rec.name;
+    if (rec.behavior) {
+      entity.behavior = rec.behavior;
+      this.engine.addBehavior(entity, rec.behavior);
+    }
+    if (rec.rigidBody) {
+      entity.rigidBody = new RigidBody(rec.rigidBody);
+      this.engine.physics.register(entity);
+    }
+    return entity;
+  }
+
+  // ---------- property copy / paste ----------
+
+  copyProperties() {
+    const target = this._primarySelection();
+    if (!target) return false;
+    this._propsClipboard = this._snapshotProperties(target);
+    return true;
+  }
+
+  pasteProperties() {
+    if (!this._propsClipboard) return false;
+    const targets = this.selectedSet.size > 0 ? [...this.selectedSet] : (this.selected ? [this.selected] : []);
+    if (!targets.length) return false;
+    const self = this;
+    const befores = targets.map((t) => ({ entity: t, props: this._snapshotProperties(t) }));
+    const doApply = (propsList) => {
+      for (const { entity, props } of propsList) {
+        this._applyProperties(entity, props);
+      }
+      this._renderInspector();
+      this._renderHierarchy();
+    };
+    if (this.history) {
+      this.history.push({
+        label: 'paste properties',
+        undo() { doApply(befores.map((b) => ({ entity: b.entity, props: b.props }))); },
+        redo() { doApply(targets.map((t) => ({ entity: t, props: self._propsClipboard }))); },
+      });
+    }
+    doApply(targets.map((t) => ({ entity: t, props: this._propsClipboard })));
+    return true;
+  }
+
+  _snapshotProperties(entity) {
+    const o = entity.object3D;
+    const snap = {
+      position: { x: o.position.x, y: o.position.y, z: o.position.z },
+      rotation: { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z },
+      scale: { x: o.scale.x, y: o.scale.y, z: o.scale.z },
+      solid: entity.solid,
+    };
+    if (o.isLight) {
+      snap.light = {
+        color: '#' + o.color.getHexString(),
+        intensity: o.intensity,
+        castShadow: !!o.castShadow,
+      };
+    }
+    const mesh = this._firstMesh(o);
+    if (mesh && mesh.material && mesh.material.isMeshStandardMaterial) {
+      const m = mesh.material;
+      snap.material = {
+        color: '#' + m.color.getHexString(),
+        metalness: m.metalness,
+        roughness: m.roughness,
+        opacity: m.opacity,
+        wireframe: !!m.wireframe,
+      };
+    }
+    if (entity.rigidBody) {
+      snap.rigidBody = {
+        type: entity.rigidBody.type,
+        mass: entity.rigidBody.mass,
+        restitution: entity.rigidBody.restitution,
+        friction: entity.rigidBody.friction,
+      };
+    }
+    return snap;
+  }
+
+  _applyProperties(entity, props) {
+    const o = entity.object3D;
+    if (props.position) o.position.set(props.position.x, props.position.y, props.position.z);
+    if (props.rotation) o.rotation.set(props.rotation.x, props.rotation.y, props.rotation.z);
+    if (props.scale) o.scale.set(props.scale.x, props.scale.y, props.scale.z);
+    if (props.solid !== undefined) {
+      entity.solid = props.solid;
+      this._updateSolidHelper(entity);
+    }
+    if (props.light && o.isLight) {
+      o.color.set(props.light.color);
+      o.intensity = props.light.intensity;
+      o.castShadow = props.light.castShadow;
+    }
+    const mesh = this._firstMesh(o);
+    if (props.material && mesh && mesh.material && mesh.material.isMeshStandardMaterial) {
+      const m = mesh.material;
+      const p = props.material;
+      m.color.set(p.color);
+      m.metalness = p.metalness;
+      m.roughness = p.roughness;
+      m.opacity = p.opacity;
+      m.wireframe = p.wireframe;
+      m.transparent = p.opacity < 1;
+      m.needsUpdate = true;
+    }
+    if (props.rigidBody && entity.rigidBody) {
+      entity.rigidBody.type = props.rigidBody.type;
+      entity.rigidBody.mass = props.rigidBody.mass;
+      entity.rigidBody.restitution = props.rigidBody.restitution;
+      entity.rigidBody.friction = props.rigidBody.friction;
+      entity.rigidBody.invMass = props.rigidBody.type === 'dynamic' ? 1 / props.rigidBody.mass : 0;
+    }
+    this._helper.setFromObject(o);
+  }
+
   setSnap(type, value) {
     this.snap[type] = value;
     this._renderStatus();
@@ -931,6 +1166,10 @@ export class ObjectEditor {
           <button class="tbtn" id="insp-dup">Duplicate</button>
           <button class="tbtn danger" id="insp-del">Delete</button>
         </div>
+        <div class="insp-row" style="margin-top:6px">
+          <button class="tbtn" id="insp-copy-props" title="Copy material/transform/light/etc properties">Copy props</button>
+          <button class="tbtn" id="insp-paste-props" title="Paste copied properties onto selection">Paste props</button>
+        </div>
       </div>`;
 
     // name (record on change/blur)
@@ -1030,6 +1269,8 @@ export class ObjectEditor {
 
     this.inspectorEl.querySelector('#insp-del').addEventListener('click', () => this.deleteSelected());
     this.inspectorEl.querySelector('#insp-dup').addEventListener('click', () => this.duplicateSelection());
+    this.inspectorEl.querySelector('#insp-copy-props').addEventListener('click', () => this.copyProperties());
+    this.inspectorEl.querySelector('#insp-paste-props').addEventListener('click', () => this.pasteProperties());
   }
 
   _vecRow(key, label, v) {
