@@ -32,7 +32,9 @@ export class GameExporter {
     });
   }
 
+  /** Build the standalone game HTML string. */
   _buildHtml(sceneJson) {
+    const safeJson = sceneJson.replace(/</g, '\\u003c');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -62,7 +64,7 @@ export class GameExporter {
 </head>
 <body>
   <div id="hint">Click to focus · WASD move · Space jump · F fire · Esc releases pointer</div>
-  <script type="application/json" id="scene-data">${sceneJson.replace(/</g, '\\u003c')}</script>
+  <script type="application/json" id="scene-data">${safeJson}</script>
   <script type="module">
     import * as THREE from 'three';
     import { Engine } from './src/engine.js';
@@ -71,6 +73,8 @@ export class GameExporter {
     import { SceneSerializer } from './src/scene.js';
     import { Player } from './src/player.js';
     import { Entity } from './src/entity.js';
+    import { LightEntity } from './src/editor.js';
+    import { Coin } from './src/enemy.js';
     import { RigidBody } from './src/physics.js';
 
     async function boot() {
@@ -79,6 +83,7 @@ export class GameExporter {
       engine.cameraRig = rig;
       rig.enabled = true;
 
+      // ensure at least some ambient light exists
       let hasAmbient = false;
       engine.scene.traverse((n) => { if (n.isAmbientLight) hasAmbient = true; });
       if (!hasAmbient) {
@@ -86,9 +91,8 @@ export class GameExporter {
       }
 
       const assets = new AssetLoader();
-      const player = engine.add(new Player());
-      player.enabled = true;
 
+      // minimal editor stub used by SceneSerializer in game mode
       const editor = {
         selectables: [],
         selected: null,
@@ -101,10 +105,15 @@ export class GameExporter {
         _renderHierarchy() {},
       };
 
+      // player must exist before deserialization so the serializer can restore it
+      const player = engine.add(new Player());
+      player.enabled = true;
+
       const serializer = new SceneSerializer(engine, editor, rig, player, assets);
       const data = JSON.parse(document.getElementById('scene-data').textContent);
       await serializer.deserialize(data);
 
+      // if the scene didn't include a ground, add a default one
       let ground = editor.selectables.find((e) => e.object3D.name === 'Ground');
       if (!ground) {
         const mesh = new THREE.Mesh(
@@ -116,15 +125,19 @@ export class GameExporter {
         ground = new Entity(mesh);
         ground.rigidBody = new RigidBody({ type: 'static' });
         engine.add(ground);
+        editor.register(ground);
       }
 
+      // wire action sounds
       player.onFire = (p, eng) => eng.playEntitySounds(p.target || p, { trigger: 'fire' });
       player.onJump = (p, eng) => eng.playEntitySounds(p.target || p, { trigger: 'jump' });
 
+      // unlock audio on first user gesture
       const unlock = () => engine.unlockAudio();
       window.addEventListener('pointerdown', unlock, { once: true });
       window.addEventListener('keydown', unlock, { once: true });
 
+      // start autoplay sounds
       for (const rec of engine.sounds) {
         if (rec.autoplay && rec.type !== 'positional' && !rec.audio.isPlaying) {
           rec.audio.play();

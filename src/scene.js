@@ -355,6 +355,10 @@ export class SceneSerializer {
         applySolid(this.player);
         await applyPhysics(this.player);
         await this._attachSounds(this.player, d.sounds);
+        // re-add the player to the engine because the wipe loop removed it
+        if (!this.engine.entities.includes(this.player)) {
+          this.engine.add(this.player);
+        }
         return this.player;
       }
       case 'coin': {
