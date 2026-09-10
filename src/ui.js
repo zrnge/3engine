@@ -61,3 +61,53 @@ export function makeDraggable(panel, handleSelector = 'h3') {
     document.addEventListener('pointercancel', onUp);
   });
 }
+
+export function makeResizable(panel, options = {}) {
+  const handle = panel.querySelector('.resize-handle');
+  if (!handle) return;
+
+  const minW = options.minWidth || 160;
+  const minH = options.minHeight || 120;
+  const maxW = options.maxWidth || window.innerWidth * 0.8;
+  const maxH = options.maxHeight || window.innerHeight * 0.8;
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Convert any right/bottom positioning to fixed left/top so resizing works predictably
+    const rect = panel.getBoundingClientRect();
+    panel.style.left = `${rect.left}px`;
+    panel.style.top = `${rect.top}px`;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    panel.style.transform = 'none';
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = rect.width;
+    const startH = rect.height;
+
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+
+    const onMove = (ev) => {
+      const newW = Math.max(minW, Math.min(startW + (ev.clientX - startX), maxW));
+      const newH = Math.max(minH, Math.min(startH + (ev.clientY - startY), maxH));
+      panel.style.width = `${newW}px`;
+      panel.style.height = `${newH}px`;
+      panel.style.maxHeight = 'none';
+    };
+
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+    };
+
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  });
+}

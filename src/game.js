@@ -3,7 +3,7 @@ import { Engine } from './engine.js';
 import { CameraRig } from './cameras.js';
 import { AssetLoader } from './loader.js';
 import { ObjectEditor, LightEntity } from './editor.js';
-import { makeDraggable } from './ui.js';
+import { makeDraggable, makeResizable } from './ui.js';
 import { History } from './history.js';
 import { SceneSerializer } from './scene.js';
 import { Entity } from './entity.js';
@@ -136,8 +136,11 @@ const _unlock = () => { engine.unlockAudio(); };
 window.addEventListener('pointerdown', _unlock, { once: false });
 window.addEventListener('keydown', _unlock, { once: false });
 
-// ---- draggable panels (drag any panel by its header) ----
-document.querySelectorAll('.panel').forEach((p) => makeDraggable(p));
+// ---- draggable + resizable panels ----
+document.querySelectorAll('.panel').forEach((p) => {
+  makeDraggable(p);
+  makeResizable(p, { minWidth: 180, minHeight: 140 });
+});
 
 // ---- asset browser: prefabs and reusable assets ----
 const assetList = document.getElementById('asset-list');

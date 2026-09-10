@@ -137,6 +137,21 @@
     }
     .bind-btn.listening { border-color: var(--accent); color: var(--accent); }
 
+    /* ---- resize handle ---- */
+    .resize-handle {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 14px;
+      height: 14px;
+      cursor: nwse-resize;
+      z-index: 20;
+      background: linear-gradient(135deg, transparent 40%, var(--dim) 40%, var(--dim) 55%, transparent 55%, transparent 70%, var(--dim) 70%);
+      opacity: 0.5;
+      border-bottom-right-radius: 7px;
+    }
+    .resize-handle:hover { opacity: 1; background-color: var(--accent-dim); }
+
     /* ---- status bar (bottom-left) ---- */
     #status {
       bottom: 10px; left: 10px; padding: 6px 12px; color: var(--dim); font-size: 12px; z-index: 10;
@@ -206,6 +221,7 @@
   <!-- scene hierarchy -->
   <div id="hierarchy" class="panel">
     <h3>Hierarchy</h3>
+    <div class="resize-handle"></div>
     <div class="add-row">
       <button class="tbtn" data-add="box">Box</button>
       <button class="tbtn" data-add="sphere">Sphere</button>
@@ -225,6 +241,7 @@
   <!-- asset browser: prefabs and reusable assets -->
   <div id="asset-browser" class="panel">
     <h3>Asset Browser</h3>
+    <div class="resize-handle"></div>
     <div class="body">
       <div class="insp-row" style="margin-bottom:8px">
         <button class="tbtn" id="btn-save-prefab" title="Save selected object as a reusable prefab">💾 Prefab</button>
@@ -236,6 +253,7 @@
   <!-- camera settings: tie the camera to any object -->
   <div id="camera-panel" class="panel">
     <h3>Camera</h3>
+    <div class="resize-handle"></div>
     <div class="body">
       <div class="prop-row"><label>Target</label><select id="cam-target"></select></div>
       <div class="prop-row"><label>FOV</label>
@@ -286,12 +304,14 @@
   <!-- inspector -->
   <div id="inspector" class="panel">
     <h3>Inspector</h3>
+    <div class="resize-handle"></div>
     <div id="inspector-body"><div class="empty">Select an object in the scene or hierarchy.</div></div>
   </div>
 
   <!-- player control settings -->
   <div id="controls-panel" class="panel">
     <h3>Player Controls</h3>
+    <div class="resize-handle"></div>
     <div class="body">
       <div class="prop-row"><label>Target</label><select id="ctl-target"></select></div>
       <label class="check-row"><input type="checkbox" id="ctl-enabled" checked /> Controls enabled</label>
