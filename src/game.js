@@ -16,14 +16,7 @@ import { GameExporter } from './export.js';
 const engine = new Engine({ background: 0x0b0e14 });
 const { scene, input } = engine;
 
-// ---- lights & ground ----
-const ambient = new THREE.AmbientLight(0xffffff, 0.55);
-scene.add(ambient);
-const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-sun.position.set(6, 12, 8);
-scene.add(sun);
-
-// no default ground — user adds their own objects
+// no default lights, ground, or starter objects — user builds the scene from scratch
 
 // ---- camera rig: 1 orbit · 2 follow · 4 free ----
 const rig = new CameraRig(engine.camera, engine.renderer.domElement);
@@ -43,10 +36,11 @@ const editor = new ObjectEditor(engine, {
   },
 });
 
-// ---- player ----
+// ---- player controller (invisible by default; user selects a target) ----
 const player = engine.add(new Player());
 player.object3D.userData.kind = 'Player';
-editor.register(player);
+player.object3D.visible = false;
+// do not register the player or default lights in the hierarchy — user adds their own objects
 
 function controlledEntity(p) {
   return p.target || p;
@@ -61,11 +55,7 @@ player.onJump = (p, eng) => {
   if (muteCheck.checked) return;
   eng.playEntitySounds(controlledEntity(p), { trigger: 'jump' });
 };
-rig.setMode('orbit', { target: player.object3D });
-
-// ---- lights are editable objects too ----
-editor.register(new LightEntity(sun, 'Sun'));
-editor.register(new LightEntity(ambient, 'Ambient'));
+rig.setMode('orbit');
 
 // ---- starter objects ----
 const assets = new AssetLoader();
@@ -218,6 +208,24 @@ document.getElementById('btn-load-glb').addEventListener('click', () => {
     }
   });
 });
+
+// ---- New scene: clear everything and wipe autosave ----
+function newScene() {
+  if (!confirm('Start a new empty scene? This clears the current scene and autosave.')) return;
+  // remove all selectable entities
+  for (const e of [...editor.selectables]) {
+    editor.removeEntity(e, { record: false });
+  }
+  editor.select(null);
+  editor._renderHierarchy();
+  refreshCamTargets();
+  refreshControlTargets();
+  history.clear();
+  refreshHistoryButtons();
+  localStorage.removeItem(AUTOSAVE_KEY);
+  markDirty();
+}
+document.getElementById('btn-new').addEventListener('click', newScene);
 
 // ---- camera panel: tie the camera to any object ----
 const camTargetSel = document.getElementById('cam-target');
@@ -617,7 +625,15 @@ window.addEventListener('keydown', (e) => { if (playing && e.code === 'Escape') 
 
 // ---- autosave: persist the scene to localStorage shortly after any edit ----
 const AUTOSAVE_KEY = 'tiny3.autosave';
+const AUTOSAVE_VERSION_KEY = 'tiny3.autosaveVersion';
+const AUTOSAVE_VERSION = '3'; // bump to clear old default scenes
 let _dirtyTimer = null;
+
+// one-time migration: clear autosaves from older versions so the new empty-scene boot applies
+if (localStorage.getItem(AUTOSAVE_VERSION_KEY) !== AUTOSAVE_VERSION) {
+  localStorage.removeItem(AUTOSAVE_KEY);
+  localStorage.setItem(AUTOSAVE_VERSION_KEY, AUTOSAVE_VERSION);
+}
 
 function markDirty() {
   if (playing) return; // play-mode changes are temporary — don't save them
@@ -721,12 +737,15 @@ refreshControlTargets();
   try {
     const saved = localStorage.getItem(AUTOSAVE_KEY);
     if (saved) {
-      const made = await serializer.deserialize(JSON.parse(saved));
-      if (made && made.length) {
-        history.clear();
-        refreshHistoryButtons();
-        refreshCamTargets();
-        console.log('[Tiny3] restored autosaved scene');
+      const data = JSON.parse(saved);
+      if (data.version === 1) {
+        const made = await serializer.deserialize(data);
+        if (made && made.length) {
+          history.clear();
+          refreshHistoryButtons();
+          refreshCamTargets();
+          console.log('[Tiny3] restored autosaved scene');
+        }
       }
     }
   } catch (err) {
