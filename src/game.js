@@ -302,6 +302,18 @@ bindSnap('snap-trans', 'translate');
 bindSnap('snap-rot', 'rotate');
 bindSnap('snap-scl', 'scale');
 
+// gizmo sensitivity slider
+{
+  const el = document.getElementById('gizmo-sens');
+  const val = document.getElementById('gizmo-sens-v');
+  if (el) {
+    el.addEventListener('input', () => {
+      editor.setGizmoSensitivity(el.value);
+      if (val) val.textContent = editor.gizmoSensitivity.toFixed(2);
+    });
+  }
+}
+
 // camera target dropdown
 {
   let camTargetBefore = rig.target;

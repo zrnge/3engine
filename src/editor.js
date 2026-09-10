@@ -72,32 +72,32 @@ export class ObjectEditor {
     this._dragStartMulti = null; // Map entity -> snapshot for multi-select gizmo drags
     this._clipboard = null; // JSON string for copy/paste
     this.snap = { translate: 0, rotate: 0, scale: 0 }; // 0 = off
+    this.gizmoSensitivity = 0.25;
+    this._gizmoBase = null; // transform at drag start
+    this._gizmoBaseMulti = null; // Map entity -> transform at drag start
 
     // --- transform gizmo ---
     this.gizmo = new TransformControls(engine.camera, engine.renderer.domElement);
+    this.gizmo.setSize(0.65);
     engine.scene.add(this.gizmo);
-    this.gizmo.addEventListener('objectChange', () => this._syncInspector());
+    this.gizmo.addEventListener('objectChange', () => this._onGizmoObjectChange());
     // don't let the orbit camera fight the gizmo while dragging its handles
     this.gizmo.addEventListener('dragging-changed', (e) => {
       if (engine.cameraRig) engine.cameraRig.enabled = !e.value;
       if (e.value) {
-        if (this.selectedSet.size > 1) this._dragStartMulti = this._snapshotMulti();
-        else this._dragStart = this._snapshot();
+        if (this.selectedSet.size > 1) {
+          this._dragStartMulti = this._snapshotMulti();
+          this._gizmoBaseMulti = this._snapshotMulti();
+        } else {
+          this._dragStart = this._snapshot();
+          this._gizmoBase = this._snapshot();
+        }
       } else {
+        this._gizmoBase = null;
+        this._gizmoBaseMulti = null;
         if (this.selectedSet.size > 1) this._recordTransformMulti();
         else this._recordTransform();
       }
-    });
-
-    // apply snapping while dragging
-    this.gizmo.addEventListener('change', () => {
-      if (!this.gizmo.dragging) return;
-      const primary = this._primarySelection();
-      if (!primary) return;
-      this._applySnap(primary.object3D);
-      this._syncMultiToPrimary(primary);
-      this._helper.setFromObject(primary.object3D);
-      this._syncInspector();
     });
 
     // --- selection highlight ---
@@ -116,6 +116,51 @@ export class ObjectEditor {
       this._renderHierarchy();
     }
     return entity;
+  }
+
+  /** Called every frame the gizmo is being dragged; apply sensitivity + snapping. */
+  _onGizmoObjectChange() {
+    const primary = this._primarySelection();
+    if (!primary) return;
+    const o = primary.object3D;
+
+    if (this.selectedSet.size > 1) {
+      if (!this._gizmoBaseMulti) return;
+      const base = this._gizmoBaseMulti.get(primary);
+      if (!base) return;
+      this._applySensitivityFromBase(o, base);
+      this._applySnap(o);
+      this._syncMultiToPrimary(primary);
+    } else {
+      if (!this._gizmoBase) return;
+      this._applySensitivityFromBase(o, this._gizmoBase);
+      this._applySnap(o);
+    }
+
+    this._helper.setFromObject(o);
+    this._syncInspector();
+    this._updateSolidHelper(primary);
+  }
+
+  _applySensitivityFromBase(o, base) {
+    const s = this.gizmoSensitivity;
+    if (this._gizmoMode === 'translate') {
+      o.position.x = base.position.x + (o.position.x - base.position.x) * s;
+      o.position.y = base.position.y + (o.position.y - base.position.y) * s;
+      o.position.z = base.position.z + (o.position.z - base.position.z) * s;
+    } else if (this._gizmoMode === 'rotate') {
+      o.rotation.x = base.rotation.x + (o.rotation.x - base.rotation.x) * s;
+      o.rotation.y = base.rotation.y + (o.rotation.y - base.rotation.y) * s;
+      o.rotation.z = base.rotation.z + (o.rotation.z - base.rotation.z) * s;
+    } else if (this._gizmoMode === 'scale') {
+      const dx = o.scale.x - base.scale.x;
+      const dy = o.scale.y - base.scale.y;
+      const dz = o.scale.z - base.scale.z;
+      // keep scale positive: add scaled delta to base, clamp near zero
+      o.scale.x = Math.max(0.01, base.scale.x + dx * s);
+      o.scale.y = Math.max(0.01, base.scale.y + dy * s);
+      o.scale.z = Math.max(0.01, base.scale.z + dz * s);
+    }
   }
 
   unregister(entity) {
@@ -683,6 +728,11 @@ export class ObjectEditor {
 
   setSnap(type, value) {
     this.snap[type] = value;
+    this._renderStatus();
+  }
+
+  setGizmoSensitivity(value) {
+    this.gizmoSensitivity = Math.max(0.05, Math.min(1, parseFloat(value) || 0.25));
     this._renderStatus();
   }
 
@@ -1417,8 +1467,9 @@ export class ObjectEditor {
     if (this.snap.translate > 0) snap.push(`grid ${this.snap.translate}`);
     if (this.snap.rotate > 0) snap.push(`angle ${this.snap.rotate}°`);
     if (this.snap.scale > 0) snap.push(`scale ${this.snap.scale}`);
+    const sensText = this.gizmoSensitivity !== 1 ? ` · sens ${this.gizmoSensitivity}` : '';
     const snapText = snap.length ? ` · snap: ${snap.join(', ')}` : '';
-    this.statusEl.innerHTML = `${this.statusPrefix}${cam} cam · ${this._gizmoMode} gizmo${sel}${snapText}`;
+    this.statusEl.innerHTML = `${this.statusPrefix}${cam} cam · ${this._gizmoMode} gizmo${sel}${sensText}${snapText}`;
   }
 }
 
