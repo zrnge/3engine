@@ -63,6 +63,7 @@ export class ObjectEditor {
     this.selectables = [];
     this.selected = null;
     this.selectedSet = new Set(); // multi-select
+    this._collapsed = new Set(); // entity -> collapsed in hierarchy
     this._raycaster = new THREE.Raycaster();
     this._gizmoMode = 'translate';
     this.statusPrefix = ''; // e.g. '▶ PLAYING · ' while in play mode
@@ -110,9 +111,12 @@ export class ObjectEditor {
 
   // ---------- registry ----------
 
-  register(entity) {
+  register(entity, parent = null) {
     if (!this.selectables.includes(entity)) {
       this.selectables.push(entity);
+      if (parent && this.selectables.includes(parent)) {
+        entity.setParent(parent, this.engine);
+      }
       this._renderHierarchy();
     }
     return entity;
@@ -167,6 +171,15 @@ export class ObjectEditor {
     const i = this.selectables.indexOf(entity);
     if (i !== -1) this.selectables.splice(i, 1);
     if (this.selected === entity) this.select(null);
+    // reparent children to scene root
+    for (const child of [...entity.children]) {
+      child.setParent(null, this.engine);
+    }
+    if (entity.parent) {
+      const idx = entity.parent.children.indexOf(entity);
+      if (idx !== -1) entity.parent.children.splice(idx, 1);
+      entity.parent = null;
+    }
     this._renderHierarchy();
   }
 
@@ -782,17 +795,90 @@ export class ObjectEditor {
   _renderHierarchy() {
     if (!this.listEl) return;
     this.listEl.innerHTML = '';
-    for (const entity of this.selectables) {
-      const li = document.createElement('li');
-      if (this.selectedSet.has(entity)) li.classList.add('selected');
-      const kind = entity.object3D.userData.kind || entity.constructor.name;
-      li.innerHTML = `<span class="ico">${this._icon(kind)}</span><span class="nm">${this._name(entity)}</span>`;
-      li.addEventListener('click', (e) => {
-        const additive = e.shiftKey;
-        this.select(entity, { additive });
-      });
-      this.listEl.appendChild(li);
+    const roots = this.selectables.filter((e) => !e.parent);
+    for (const root of roots) {
+      this._renderHierarchyNode(root, 0);
     }
+  }
+
+  _renderHierarchyNode(entity, depth) {
+    const li = document.createElement('li');
+    li.style.paddingLeft = `${12 + depth * 16}px`;
+    if (this.selectedSet.has(entity)) li.classList.add('selected');
+    li.draggable = true;
+    const kind = entity.object3D.userData.kind || entity.constructor.name;
+    const hasChildren = entity.children.length > 0;
+    const collapsed = hasChildren && this._collapsed.has(entity);
+    const toggle = hasChildren
+      ? `<span class="collapse" style="cursor:pointer;width:14px;text-align:center;display:inline-block">${collapsed ? '▶' : '▼'}</span>`
+      : '<span style="width:14px;display:inline-block"></span>';
+    li.innerHTML = `${toggle}<span class="ico">${this._icon(kind)}</span><span class="nm">${this._name(entity)}</span>`;
+
+    // click to select
+    li.addEventListener('click', (e) => {
+      if (e.target.classList.contains('collapse')) {
+        if (this._collapsed.has(entity)) this._collapsed.delete(entity);
+        else this._collapsed.add(entity);
+        this._renderHierarchy();
+        return;
+      }
+      const additive = e.shiftKey;
+      this.select(entity, { additive });
+    });
+
+    // drag to reparent
+    li.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', String(this.selectables.indexOf(entity)));
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    li.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    li.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      const from = this.selectables[fromIdx];
+      if (!from || from === entity) return;
+      if (this._isDescendant(entity, from)) return; // can't parent to own child
+      this._setParentWithHistory(from, entity);
+    });
+
+    this.listEl.appendChild(li);
+
+    if (hasChildren && !collapsed) {
+      for (const child of entity.children) {
+        this._renderHierarchyNode(child, depth + 1);
+      }
+    }
+  }
+
+  _isDescendant(ancestor, entity) {
+    let p = entity.parent;
+    while (p) {
+      if (p === ancestor) return true;
+      p = p.parent;
+    }
+    return false;
+  }
+
+  _setParentWithHistory(child, newParent) {
+    const oldParent = child.parent;
+    if (oldParent === newParent) return;
+    const self = this;
+    const doSet = (parent) => {
+      child.setParent(parent, self.engine);
+      self._renderHierarchy();
+      if (self.selected === child) self._renderInspector();
+    };
+    if (this.history) {
+      this.history.push({
+        label: 'reparent',
+        undo() { doSet(oldParent); },
+        redo() { doSet(newParent); },
+      });
+    }
+    doSet(newParent);
   }
 
   _icon(kind) {
@@ -801,6 +887,7 @@ export class ObjectEditor {
       case 'Coin': return '◉';
       case 'Prop': return '■';
       case 'Light': return '☀';
+      case 'Empty': return '◇';
       default: return '◆';
     }
   }
@@ -826,6 +913,7 @@ export class ObjectEditor {
     this.inspectorEl.innerHTML = `
       <div class="body">
         <input class="obj-name" id="insp-name" value="${this._name(sel)}" spellcheck="false" />
+        <div class="prop-row"><label>Parent</label><select id="insp-parent">${this._parentOptions(sel)}</select></div>
         ${this._vecRow('pos', 'Position', o.position)}
         ${this._vecRow('rot', 'Rotation°', { x: o.rotation.x * DEG, y: o.rotation.y * DEG, z: o.rotation.z * DEG })}
         ${isLight ? '' : this._vecRow('scl', 'Scale', o.scale)}
@@ -858,6 +946,19 @@ export class ObjectEditor {
         nameBefore = o.name;
       }
     });
+
+    // parent dropdown
+    const parentSel = this.inspectorEl.querySelector('#insp-parent');
+    if (parentSel) {
+      let parentBefore = sel.parent;
+      parentSel.addEventListener('change', () => {
+        const idx = parseInt(parentSel.value, 10);
+        const newParent = Number.isInteger(idx) ? this.selectables[idx] : null;
+        if (newParent === sel || this._isDescendant(sel, newParent)) return;
+        this._setParentWithHistory(sel, newParent);
+        parentBefore = newParent;
+      });
+    }
 
     // numeric vectors — record on change/blur per axis
     const vecs = [
@@ -937,6 +1038,19 @@ export class ObjectEditor {
         <input id="insp-${key}-y" type="number" step="0.001" value="${f(v.y)}" />
         <input id="insp-${key}-z" type="number" step="0.001" value="${f(v.z)}" />
       </div>`;
+  }
+
+  _parentOptions(sel) {
+    let html = '<option value="">(none / scene root)</option>';
+    for (let i = 0; i < this.selectables.length; i++) {
+      const e = this.selectables[i];
+      if (e === sel) continue;
+      if (this._isDescendant(sel, e)) continue; // can't parent to own descendant
+      const name = this._name(e) || `Object ${i}`;
+      const selected = e === sel.parent ? ' selected' : '';
+      html += `<option value="${i}"${selected}>${name}</option>`;
+    }
+    return html;
   }
 
   // ---------- lights ----------
@@ -1478,9 +1592,9 @@ export class ObjectEditor {
  * list and appear in the hierarchy. Ambient/hemisphere lights have no
  * position to drag; directional/point/spot do.
  */
-export class LightEntity {
+export class LightEntity extends Entity {
   constructor(light, name) {
-    this.object3D = light;
+    super(light);
     light.name = name;
     light.userData.kind = 'Light';
   }

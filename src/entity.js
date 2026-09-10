@@ -9,14 +9,54 @@ export class Entity {
     this.object3D = object3D;
     this.alive = true;
     this.solid = false; // if true, player cannot walk through this object
+    this.parent = null; // Entity or null
+    this.children = []; // Entity[]
   }
 
   start(_engine) {}
   update(_dt, _engine) {}
 
+  /** Reparent this entity under `newParent` (Entity or null for scene root). */
+  setParent(newParent, engine) {
+    if (this.parent === newParent) return;
+    // detach from old parent
+    if (this.parent) {
+      const idx = this.parent.children.indexOf(this);
+      if (idx !== -1) this.parent.children.splice(idx, 1);
+      // preserve world transform before reparenting
+      this.object3D.applyMatrix4(this.parent.object3D.matrixWorld);
+      this.object3D.updateMatrix();
+      this.parent.object3D.remove(this.object3D);
+    } else if (engine) {
+      engine.scene.remove(this.object3D);
+      this.object3D.updateMatrixWorld();
+    }
+    // remove from engine root list if it was there
+    if (engine) engine.remove(this);
+
+    this.parent = newParent;
+    if (newParent) {
+      newParent.children.push(this);
+      newParent.object3D.add(this.object3D);
+      // convert world matrix back to local under new parent
+      const parentInv = new THREE.Matrix4().copy(newParent.object3D.matrixWorld).invert();
+      this.object3D.applyMatrix4(parentInv);
+      this.object3D.updateMatrix();
+    } else if (engine) {
+      engine.scene.add(this.object3D);
+      engine.add(this);
+    }
+  }
+
+  /** Detach all children and remove this entity from the scene/engine. */
   destroy(engine) {
     this.alive = false;
-    engine.remove(this);
+    // destroy children first
+    for (let i = this.children.length - 1; i >= 0; i--) {
+      this.children[i].destroy(engine);
+    }
+    if (this.parent) this.setParent(null, engine);
+    else engine.remove(this);
   }
 }
 

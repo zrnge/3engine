@@ -116,12 +116,16 @@ export class SceneSerializer {
 
   _serializeEntity(entity) {
     const o = entity.object3D;
+    const parentIdx = entity.parent
+      ? this.editor.selectables.findIndex((e) => e === entity.parent)
+      : -1;
     const base = {
       name: o.name || '',
       position: v3(o.position),
       rotation: v3(o.rotation),
       scale: v3(o.scale),
       solid: !!entity.solid,
+      parent: parentIdx,
     };
 
     // lights
@@ -242,6 +246,17 @@ export class SceneSerializer {
       }
     }
 
+    // restore parenting after all entities exist
+    for (let i = 0; i < (data.entities || []).length; i++) {
+      const d = data.entities[i];
+      const child = made[i];
+      if (!child || !Number.isInteger(d.parent) || d.parent < 0) continue;
+      const parent = made[d.parent];
+      if (parent && parent !== child) {
+        child.setParent(parent, this.engine);
+      }
+    }
+
     // camera
     if (data.camera) {
       const c = data.camera;
@@ -262,6 +277,7 @@ export class SceneSerializer {
     }
 
     // player settings
+    this.editor._renderHierarchy();
     if (data.player) {
       const p = this.player;
       const d = data.player;
