@@ -58,13 +58,13 @@
     .tbtn .k { color: var(--dim); font-size: 11px; margin-left: 4px; }
 
     /* ---- hierarchy (left) ---- */
-    #hierarchy { top: 64px; left: 10px; width: 210px; max-height: min(46vh, calc(100vh - 320px)); overflow-y: auto; padding-bottom: 6px; z-index: 10; }
+    #hierarchy { top: 64px; left: 10px; width: 210px; height: min(46vh, calc(100vh - 320px)); overflow-y: auto; padding-bottom: 6px; z-index: 10; }
     #hierarchy .add-row { display: flex; gap: 4px; padding: 8px 10px 4px; flex-wrap: wrap; }
     #hierarchy .add-row .tbtn { border: 1px solid var(--border); padding: 3px 8px; font-size: 12px; }
     #scene-list { list-style: none; margin: 4px 0 0; padding: 0; }
 
     /* ---- asset browser (left, below camera panel) ---- */
-    #asset-browser { top: calc(64px + min(46vh, calc(100vh - 320px)) + min(34vh, calc(100vh - 300px)) + 20px); left: 10px; width: 210px; max-height: min(30vh, calc(100vh - 200px)); overflow-y: auto; padding-bottom: 10px; z-index: 10; }
+    #asset-browser { top: calc(64px + min(46vh, calc(100vh - 320px)) + min(34vh, calc(100vh - 300px)) + 20px); left: 10px; width: 210px; height: min(30vh, calc(100vh - 200px)); overflow-y: auto; padding-bottom: 10px; z-index: 10; }
     #asset-browser .body { padding: 8px 12px; }
     #asset-list { list-style: none; margin: 0; padding: 0; }
     #asset-list li {
@@ -90,7 +90,7 @@
     #camera-panel .body { padding: 8px 12px; }
 
     /* ---- inspector (right) ---- */
-    #inspector { top: 64px; right: 10px; width: 250px; padding-bottom: 10px; max-height: min(40vh, calc(100vh - 420px)); overflow-y: auto; z-index: 10; }
+    #inspector { top: 64px; right: 10px; width: 250px; padding-bottom: 10px; height: min(40vh, calc(100vh - 420px)); overflow-y: auto; z-index: 10; }
     #inspector .body { padding: 8px 12px; }
     #inspector .obj-name {
       width: 100%; margin-bottom: 10px;
@@ -126,7 +126,7 @@
     .check-row input { accent-color: var(--accent); }
 
     /* ---- controls panel (right, below inspector) ---- */
-    #controls-panel { top: calc(64px + min(40vh, calc(100vh - 420px)) + 10px); right: 10px; width: 250px; padding-bottom: 10px; max-height: min(42vh, calc(100vh - 240px)); overflow-y: auto; z-index: 10; }
+    #controls-panel { top: calc(64px + min(40vh, calc(100vh - 420px)) + 10px); right: 10px; width: 250px; padding-bottom: 10px; height: min(42vh, calc(100vh - 240px)); overflow-y: auto; z-index: 10; }
     #controls-panel .body { padding: 8px 12px; }
     .bind-row { display: grid; grid-template-columns: 62px 1fr; gap: 6px; align-items: center; margin-bottom: 5px; }
     .bind-row label { color: var(--dim); font-size: 12px; text-transform: capitalize; }
@@ -142,13 +142,16 @@
       position: absolute;
       bottom: 0;
       right: 0;
-      width: 14px;
-      height: 14px;
+      width: 22px;
+      height: 22px;
       cursor: nwse-resize;
       z-index: 20;
-      background: linear-gradient(135deg, transparent 40%, var(--dim) 40%, var(--dim) 55%, transparent 55%, transparent 70%, var(--dim) 70%);
-      opacity: 0.5;
+      background:
+        linear-gradient(135deg, transparent 45%, var(--dim) 45%, var(--dim) 55%, transparent 55%, transparent 70%, var(--dim) 70%, var(--dim) 80%, transparent 80%);
+      opacity: 0.7;
       border-bottom-right-radius: 7px;
+      border-top: 1px solid var(--border);
+      border-left: 1px solid var(--border);
     }
     .resize-handle:hover { opacity: 1; background-color: var(--accent-dim); }
 
@@ -343,6 +346,6 @@
     <span class="k">▶</span> play · scene autosaves · <span class="k">Shift+click</span> multi-select
   </div>
 
-  <script type="module" src="./src/game.js"></script>
+  <script type="module" src="./src/game.js?v=4"></script>
 </body>
 </html>

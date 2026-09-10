@@ -1198,7 +1198,7 @@ export class ObjectEditor {
       parentSel.addEventListener('change', () => {
         const idx = parseInt(parentSel.value, 10);
         const newParent = Number.isInteger(idx) ? this.selectables[idx] : null;
-        if (newParent === sel || this._isDescendant(sel, newParent)) return;
+        if (!newParent || newParent === sel || this._isDescendant(sel, newParent)) return;
         this._setParentWithHistory(sel, newParent);
         parentBefore = newParent;
       });

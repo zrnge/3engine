@@ -3,7 +3,7 @@ import { Engine } from './engine.js';
 import { CameraRig } from './cameras.js';
 import { AssetLoader } from './loader.js';
 import { ObjectEditor, LightEntity } from './editor.js';
-import { makeDraggable, makeResizable } from './ui.js';
+import { makeDraggable, makeResizable } from './ui.js?v=4';
 import { History } from './history.js';
 import { SceneSerializer } from './scene.js';
 import { Entity } from './entity.js';
