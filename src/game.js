@@ -209,6 +209,23 @@ document.getElementById('btn-load-glb').addEventListener('click', () => {
   });
 });
 
+// ---- Reset View button ----
+document.getElementById('btn-reset-view').addEventListener('click', () => {
+  rig.setMode('orbit');
+  rig.target = null;
+  rig.setTarget(null);
+  rig.orbitHeight = 8;
+  rig.orbitAngle = 0;
+  rig.orbitRadius = 12;
+  rig.followOffset = 6;
+  rig.followHeight = 3;
+  rig.camera.position.set(0, 8, 12);
+  rig.camera.lookAt(0, 0, 0);
+  rig.update(0, input);
+  document.querySelectorAll('.cam-btn').forEach((b) =>
+    b.classList.toggle('active', b.dataset.mode === 'orbit'));
+});
+
 // ---- New scene: clear everything and wipe autosave ----
 function newScene() {
   if (!confirm('Start a new empty scene? This clears the current scene and autosave.')) return;

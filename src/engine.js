@@ -38,7 +38,7 @@ export class Engine {
     this.behaviors = [];       // { entity, fn } compiled behavior scripts
 
     // editor reference grid — not part of the scene hierarchy / serialization
-    this.grid = new THREE.GridHelper(40, 40, 0x4dd0a6, 0x30363d);
+    this.grid = new THREE.GridHelper(100, 100, 0x6ee7b7, 0x3d4552);
     this.grid.name = '__grid';
     this.grid.position.y = 0;
     this.scene.add(this.grid);
