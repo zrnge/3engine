@@ -62,6 +62,12 @@ export class Input {
       this.wheel += e.deltaY;
     }, { passive: true });
 
+    // right-click is reserved for camera control in the 3D view, not the browser menu
+    window.addEventListener('contextmenu', (e) => {
+      if (e.target && e.target.closest && e.target.closest('.panel')) return;
+      e.preventDefault();
+    });
+
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement != null;
     });

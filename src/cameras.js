@@ -50,24 +50,36 @@ export class CameraRig {
     this._last = { x: 0, y: 0 };
 
     domElement.addEventListener('mousedown', (e) => {
-      // don't start an orbit-drag when the click is on an editor UI panel
+      // don't start a camera-drag when the click is on an editor UI panel
       const onPanel = e.target && e.target.closest && e.target.closest('.panel');
-      if (this.mode === 'orbit' && e.button === 0 && this.enabled !== false && !onPanel) {
+      if (this.enabled === false || onPanel) return;
+      // right mouse = orbit / pan camera; left mouse is reserved for gizmo/object selection
+      if (e.button === 2) {
         this._dragging = true;
+        this._dragButton = 2;
         this._last.x = e.clientX;
         this._last.y = e.clientY;
       }
     });
-    window.addEventListener('mouseup', () => { this._dragging = false; });
+    window.addEventListener('mouseup', () => { this._dragging = false; this._dragButton = null; });
     window.addEventListener('mousemove', (e) => {
-      if (this._dragging && this.mode === 'orbit') {
-        this.theta -= (e.clientX - this._last.x) * 0.005;
-        this.phi = THREE.MathUtils.clamp(
-          this.phi - (e.clientY - this._last.y) * 0.005, 0.15, Math.PI / 2 - 0.05
-        );
-        this._last.x = e.clientX;
-        this._last.y = e.clientY;
+      if (!this._dragging || this.mode !== 'orbit') return;
+      const dx = (e.clientX - this._last.x) * 0.005;
+      const dy = (e.clientY - this._last.y) * 0.005;
+      if (this._dragButton === 2) {
+        // Shift + right-drag = pan; plain right-drag = orbit
+        if (e.shiftKey) {
+          const panSpeed = this.distance * 0.003;
+          const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0).multiplyScalar(-dx * panSpeed);
+          const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1).multiplyScalar(dy * panSpeed);
+          this.lookAt.add(right).add(up);
+        } else {
+          this.theta -= dx;
+          this.phi = THREE.MathUtils.clamp(this.phi - dy, 0.15, Math.PI / 2 - 0.05);
+        }
       }
+      this._last.x = e.clientX;
+      this._last.y = e.clientY;
     });
   }
 

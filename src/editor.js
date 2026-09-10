@@ -533,7 +533,7 @@ export class ObjectEditor {
   update(_dt) {
     const { input, camera } = this.engine;
 
-    // click to select (only when the gizmo isn't being dragged)
+    // click to select with LEFT mouse only (right mouse is for camera control)
     if (input.mouseClicked(0) && !this.gizmo.dragging) {
       this._raycaster.setFromCamera(input.mouseNDC, camera);
       const roots = this.selectables
