@@ -108,6 +108,13 @@ export class Player extends Entity {
       if (!fpsMode && this.rotateToMovement) {
         object3D.rotation.y = Math.atan2(rx, rz);
       }
+    } else {
+      // brake quickly when no movement keys are held so the player doesn't slide
+      const brake = Math.min(1, 12 * dt);
+      body.velocity.x *= (1 - brake);
+      body.velocity.z *= (1 - brake);
+      if (Math.abs(body.velocity.x) < 0.01) body.velocity.x = 0;
+      if (Math.abs(body.velocity.z) < 0.01) body.velocity.z = 0;
     }
 
     if (fpsMode) {
