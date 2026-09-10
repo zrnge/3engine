@@ -1,10 +1,10 @@
 /**
- * Tiny3 Exporter — package the current editor scene into a standalone
- * playable HTML file.
+ * Tiny3 Exporter — package the current editor scene into a playable
+ * HTML file.
  *
- * The exported page reuses the same vendored Three.js runtime modules as the
- * editor, but strips out all editing UI. It embeds the scene JSON directly and
- * boots a minimal game loop on load.
+ * The exported page reuses the same vendored Three.js runtime modules and
+ * engine source as the editor. It must be placed in the project root
+ * (next to lib/, src/, assets/) or served from the same origin to work.
  */
 
 export class GameExporter {
@@ -12,7 +12,7 @@ export class GameExporter {
     this.serializer = serializer;
   }
 
-  /** Build and download a standalone .html file from the current scene. */
+  /** Build and download tiny3-game.html from the current scene. */
   exportToFile(filename = 'tiny3-game.html') {
     const sceneJson = JSON.stringify(this.serializer.serialize(), null, 2);
     const html = this._buildHtml(sceneJson);
@@ -21,13 +21,18 @@ export class GameExporter {
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+    });
   }
 
   _buildHtml(sceneJson) {
-    // The runtime bootstrap is inlined so the file is self-contained.
-    // It imports the same ES modules the editor uses.
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -74,7 +79,6 @@ export class GameExporter {
       engine.cameraRig = rig;
       rig.enabled = true;
 
-      // ambient light fallback if the scene has none
       let hasAmbient = false;
       engine.scene.traverse((n) => { if (n.isAmbientLight) hasAmbient = true; });
       if (!hasAmbient) {
@@ -85,7 +89,6 @@ export class GameExporter {
       const player = engine.add(new Player());
       player.enabled = true;
 
-      // editor stub: the serializer expects an editor with selectables/register
       const editor = {
         selectables: [],
         selected: null,
@@ -102,7 +105,6 @@ export class GameExporter {
       const data = JSON.parse(document.getElementById('scene-data').textContent);
       await serializer.deserialize(data);
 
-      // ensure a ground collider exists
       let ground = editor.selectables.find((e) => e.object3D.name === 'Ground');
       if (!ground) {
         const mesh = new THREE.Mesh(
@@ -116,16 +118,13 @@ export class GameExporter {
         engine.add(ground);
       }
 
-      // wire player action sounds
       player.onFire = (p, eng) => eng.playEntitySounds(p.target || p, { trigger: 'fire' });
       player.onJump = (p, eng) => eng.playEntitySounds(p.target || p, { trigger: 'jump' });
 
-      // unlock audio on first gesture
       const unlock = () => engine.unlockAudio();
       window.addEventListener('pointerdown', unlock, { once: true });
       window.addEventListener('keydown', unlock, { once: true });
 
-      // start ambient / global autoplay sounds
       for (const rec of engine.sounds) {
         if (rec.autoplay && rec.type !== 'positional' && !rec.audio.isPlaying) {
           rec.audio.play();
@@ -137,7 +136,6 @@ export class GameExporter {
         engine.input.endFrame();
       };
 
-      // debug handle for testing the exported build
       window.__tiny3Game = { engine, player, rig };
 
       engine.start();
