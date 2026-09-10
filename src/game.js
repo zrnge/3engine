@@ -23,15 +23,7 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(6, 12, 8);
 scene.add(sun);
 
-// solid floor (box, not plane, so physics has real thickness and no tunneling)
-const ground = new THREE.Mesh(
-  new THREE.BoxGeometry(30, 1, 30),
-  new THREE.MeshStandardMaterial({ color: 0x1a2233 })
-);
-ground.position.y = -0.5;
-scene.add(ground);
-scene.add(new THREE.GridHelper(30, 30, 0x2b3a55, 0x22304a));
-// ground is wrapped as an entity after autosave restore so it survives scene reload
+// no default ground — user adds their own objects
 
 // ---- camera rig: 1 orbit · 2 follow · 4 free ----
 const rig = new CameraRig(engine.camera, engine.renderer.domElement);
@@ -144,22 +136,7 @@ function addLight(kind) {
   return entity;
 }
 
-// a couple of starter props
-addPrimitive('box').object3D.position.set(4, 0.75, -3);
-addPrimitive('cone').object3D.position.set(-4, 1, 2);
-
-const coins = [];
-for (let i = 0; i < 4; i++) {
-  const [x, z] = Coin.randomPosition();
-  const coin = editor.register(engine.add(new Coin(x, z)));
-  coin.object3D.userData.kind = 'Coin';
-  coins.push(coin);
-}
-
-// sample GLB model (Khronos Duck, CC-BY) — replace with your own in /assets
-assets.load('./assets/duck.glb', { scale: 0.05, position: [-2, 0, -4], name: 'Duck' })
-  .then((duck) => { if (!localStorage.getItem('tiny3.autosave')) addProp(duck, 'Duck'); })
-  .catch((err) => console.warn('[Tiny3] duck.glb failed to load:', err));
+// no starter props, coins, or sample models — user builds the scene from scratch
 
 // debug handle
 window.__engine = engine;
@@ -755,13 +732,6 @@ refreshControlTargets();
   } catch (err) {
     console.warn('[Tiny3] autosave restore failed:', err);
   }
-
-  // ground is a static physics collider, registered after autosave restore so it survives scene reloads
-  ground.name = 'Ground';
-  const groundEntity = new Entity(ground);
-  groundEntity.rigidBody = new RigidBody({ type: 'static' });
-  engine.add(groundEntity);
-  editor.register(groundEntity);
 
   engine.start();
 })();
