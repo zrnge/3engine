@@ -1,0 +1,10 @@
+{
+  "about": "The engine's own models, offered in the Asset Browser's library (Built-in). Add an entry for each model file put in assets/.",
+  "models": [
+    { "url": "assets/robot.glb", "name": "Robot", "tags": ["character", "animated"] },
+    { "url": "assets/ak74u.glb", "name": "AK-74U", "tags": ["weapon", "first person", "animated"] },
+    { "url": "assets/blaster.glb", "name": "Blaster", "tags": ["weapon"] },
+    { "url": "assets/blaster-inspect.glb", "name": "Blaster (inspect)", "tags": ["weapon", "animated"] },
+    { "url": "assets/duck.glb", "name": "Duck", "tags": ["prop"] }
+  ]
+}

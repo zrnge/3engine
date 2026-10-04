@@ -1,0 +1,20 @@
+{
+  "name": "tiny3",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A browser-based Three.js game engine and scene editor that runs straight off GitHub Pages — no build step.",
+  "scripts": {
+    "serve": "node -e \"import('node:child_process').then(({spawn})=>spawn(process.platform==='win32'?'python':'python3',['serve.py'],{stdio:'inherit'}))\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:browser": "node test/browser/smoke.mjs",
+    "check": "node tools/undeclared.mjs",
+    "bench": "node --import ./tools/bench/register.mjs tools/bench-physics.mjs"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.14.5",
+    "playwright": "^1.63.0",
+    "vitest": "^2.1.9"
+  }
+}

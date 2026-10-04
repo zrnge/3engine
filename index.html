@@ -14,6 +14,10 @@
       --dim: #8b949e;
       --accent: #4dd0a6;
       --accent-dim: #21262d;
+      /* measured from the real toolbar at runtime — it wraps on narrow screens,
+         and every panel hangs below whatever height it ends up being */
+      --toolbar-h: 44px;
+      --top: calc(var(--toolbar-h) + 20px);
     }
     html, body { margin: 0; padding: 0; overflow: hidden; background: var(--bg); }
     canvas { display: block; }
@@ -41,12 +45,20 @@
     }
 
     /* ---- top toolbar ---- */
+    /* Wraps instead of overflowing: centred + nowrap used to push Play off the
+       left edge and Export off the right on a 1366px laptop, with no way to
+       reach either. */
     #toolbar {
-      top: 10px; left: 50%; transform: translateX(-50%);
+      /* Centred via auto margins, NOT left:50% + translate — with left:50% the
+         box can only use the right half of the screen, so a wrapping toolbar
+         folded into four rows on a 1080p display. */
+      top: 10px; left: 0; right: 0; margin-inline: auto;
+      width: max-content; max-width: calc(100vw - 20px);
       display: flex; gap: 4px; align-items: center;
+      flex-wrap: wrap; justify-content: center;
       padding: 6px 8px; z-index: 10;
     }
-    #toolbar .sep { width: 1px; height: 22px; background: var(--border); margin: 0 6px; }
+    #toolbar .sep { width: 1px; height: 22px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
     .tbtn {
       appearance: none; border: 1px solid transparent; background: transparent;
       color: var(--text); font: inherit; padding: 5px 10px; border-radius: 6px;
@@ -57,14 +69,52 @@
     .tbtn:disabled { opacity: 0.4; cursor: default; }
     .tbtn .k { color: var(--dim); font-size: 11px; margin-left: 4px; }
 
-    /* ---- hierarchy (left) ---- */
-    #hierarchy { top: 64px; left: 10px; width: 210px; height: min(46vh, calc(100vh - 320px)); overflow-y: auto; padding-bottom: 6px; z-index: 10; }
-    #hierarchy .add-row { display: flex; gap: 4px; padding: 8px 10px 4px; flex-wrap: wrap; }
-    #hierarchy .add-row .tbtn { border: 1px solid var(--border); padding: 3px 8px; font-size: 12px; }
+    /* ---- docks: the panels stack in two scrollable columns ----
+       The dock itself ignores the pointer, so the gaps between panels still
+       belong to the 3D view. Each panel collapses from its header, drags out
+       into a floating window, and double-clicking a floating header docks it. */
+    .dock {
+      position: fixed; top: var(--top); z-index: 10;
+      display: flex; flex-direction: column; gap: 8px;
+      overflow-y: auto; overflow-x: hidden; scrollbar-width: thin;
+      pointer-events: none;
+    }
+    #dock-left { left: 10px; width: 232px; bottom: var(--status-h, 72px); }
+    #dock-right { right: 10px; width: 272px; bottom: 10px; }
+    .dock > .panel { position: relative; flex: none; pointer-events: auto; }
+    .dock > .panel.floating { position: fixed; z-index: 25; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
+    .dock > .panel > h3 { position: relative; padding-right: 26px; outline: none; }
+    .dock > .panel > h3::after {
+      content: '▾'; position: absolute; right: 11px; top: 6px;
+      font-size: 12px; transition: transform 0.15s;
+    }
+    .dock > .panel > h3:focus-visible { color: var(--accent); }
+    .dock > .panel.collapsed > h3::after { transform: rotate(-90deg); }
+    .dock > .panel.collapsed > h3 { border-bottom-color: transparent; }
+    .dock > .panel.collapsed > :not(h3) { display: none; }
+    /* A dock only takes the pointer while it overflows, so its scrollbar can be
+       dragged; with room to spare, its empty space belongs to the 3D view. */
+    .dock.overflowing { pointer-events: auto; }
+    .dock { scrollbar-color: var(--border) transparent; }
+    /* resize handles only appear on hover, instead of sitting on the content */
+    .dock > .panel > .resize-handle { opacity: 0; transition: opacity 0.15s; }
+    .dock > .panel:hover > .resize-handle { opacity: 0.7; }
+    #insp-rb-mass, #vm-scale {
+      grid-column: 2 / 4; width: 100%; min-width: 0; background: #0d1117;
+      border: 1px solid var(--border); border-radius: 4px; color: var(--text);
+      font: inherit; font-size: 12px; padding: 3px 5px;
+    }
+    #insp-rb-mass:disabled { opacity: 0.45; }
+    #vm-scale { grid-column: auto; width: auto; flex: 1; }
+    .panel .add-row { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+    .panel .add-row .tbtn { border: 1px solid var(--border); padding: 3px 8px; font-size: 12px; }
+
+    /* ---- hierarchy ---- */
+    #hierarchy { padding-bottom: 6px; max-height: 32vh; overflow-y: auto; }
     #scene-list { list-style: none; margin: 4px 0 0; padding: 0; }
 
     /* ---- asset browser (left, below camera panel) ---- */
-    #asset-browser { top: calc(64px + min(46vh, calc(100vh - 320px)) + min(34vh, calc(100vh - 300px)) + 20px); left: 10px; width: 210px; height: min(30vh, calc(100vh - 200px)); overflow-y: auto; padding-bottom: 10px; z-index: 10; }
+    #asset-browser { padding-bottom: 6px; }
     #asset-browser .body { padding: 8px 12px; }
     #asset-list { list-style: none; margin: 0; padding: 0; }
     #asset-list li {
@@ -76,6 +126,47 @@
     #asset-list li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #asset-list li .del { color: var(--dim); font-size: 14px; padding: 0 4px; }
     #asset-list li .del:hover { color: #f85149; }
+    #asset-list li .cnt { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+    /* Inspector: a model's animation clips */
+    .anim-count { color: var(--dim); font-weight: 400; text-transform: none; letter-spacing: 0; }
+    .anim-list { list-style: none; margin: 0 0 6px; padding: 0; max-height: 220px; overflow-y: auto; }
+    .anim-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 3px 0; border-bottom: 1px solid var(--border); }
+    .anim-list li.playing .anim-name { color: var(--accent); }
+    .anim-list .anim-name { flex: 1; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .anim-list .tbtn.mini { font-size: 11px; padding: 1px 6px; border: 1px solid var(--border); }
+    .anim-chip { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; padding: 0 2px 0 6px;
+      border: 1px solid var(--accent); border-radius: 10px; color: var(--accent); }
+    .anim-hint { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+    .anim-list .anim-len { font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+    .anim-list li.anim-cut-form { gap: 4px; font-size: 11px; color: var(--dim); padding: 4px 0 6px; }
+    .anim-cut-form input[type=text] { flex: 1 1 100%; }
+    .anim-cut-form input { background: #0d1117; border: 1px solid var(--border); border-radius: 4px; color: var(--text);
+      font: inherit; font-size: 11px; padding: 2px 4px; }
+    .anim-cut-form input[type=number] { width: 58px; }
+    .anim-cut-scrub { flex: 1 1 100%; display: flex; align-items: center; gap: 6px; }
+    .anim-cut-scrub input[type=range] { flex: 1; padding: 0; border: 0; background: none; }
+    .anim-cut-scrub span { font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+    .anim-note { font-size: 11px; color: var(--accent); margin: 4px 0; }
+    .anim-capture { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center;
+      background: rgba(5, 7, 11, 0.55); cursor: crosshair; font-family: system-ui, sans-serif; color: var(--text); }
+    .anim-capture-card { cursor: default; display: flex; flex-direction: column; gap: 10px; padding: 18px 20px;
+      background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; font-size: 14px; max-width: 360px; }
+    .anim-capture-card .tbtn { border: 1px solid var(--border); }
+    .asset-storage { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--dim); }
+    .asset-storage span { flex: 1; }
+    .asset-storage .tbtn { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); }
+    /* Inspector: a linked prefab copy */
+    .prefab-box { border: 1px solid rgba(77, 208, 166, 0.35); border-radius: 6px; padding: 6px 8px; margin: 6px 0 8px; }
+    .prefab-box.changed { border-color: #d29922; }
+    .prefab-box.missing { border-color: var(--dim); }
+    .prefab-head { font-size: 12px; margin-bottom: 4px; }
+    .prefab-head b { color: var(--accent); }
+    .prefab-count { color: var(--dim); }
+    .prefab-note { color: var(--dim); font-size: 11px; margin-bottom: 4px; }
+    .prefab-parts { list-style: none; margin: 0 0 6px; padding: 0; }
+    .prefab-parts li { display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 0; }
+    .prefab-parts li span { flex: 1; color: #d29922; }
+    .prefab-parts .mini { font-size: 10px; padding: 1px 6px; border-color: var(--border); }
     #scene-list li {
       padding: 5px 12px; cursor: pointer; display: flex; align-items: center; gap: 7px;
       border-left: 3px solid transparent; color: var(--text);
@@ -86,11 +177,19 @@
     #scene-list li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* ---- camera panel (left, below hierarchy) ---- */
-    #camera-panel { top: calc(64px + min(46vh, calc(100vh - 320px)) + 10px); left: 10px; width: 210px; padding-bottom: 10px; z-index: 10; }
+    #camera-panel { padding-bottom: 6px; }
     #camera-panel .body { padding: 8px 12px; }
+    .cam-tabs { display: flex; flex-wrap: wrap; gap: 3px; margin: 10px 0 6px; }
+    .cam-tabs .cam-tab { font-size: 12px; padding: 3px 8px; border: 1px solid var(--border); }
+    .cam-hint { font-size: 11px; color: var(--dim); margin-bottom: 6px; }
+    /* Game panel: the crosshair as it will look, over sky and ground */
+    .xh-preview { height: 72px; margin: 4px 0 8px; border-radius: 6px; border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center; line-height: 0;
+      background: linear-gradient(180deg, #9ab6d8 0%, #c9d4df 50%, #5a4632 50%, #3a2e22 100%); }
 
     /* ---- inspector (right) ---- */
-    #inspector { top: 64px; right: 10px; width: 250px; padding-bottom: 10px; height: min(40vh, calc(100vh - 420px)); overflow-y: auto; z-index: 10; }
+    /* capped so the collapsed panel headers below it stay in reach */
+    #inspector { padding-bottom: 6px; max-height: 58vh; overflow-y: auto; }
     #inspector .body { padding: 8px 12px; }
     #inspector .obj-name {
       width: 100%; margin-bottom: 10px;
@@ -105,9 +204,10 @@
     }
     .vec-row input:focus { outline: none; border-color: var(--accent); }
     .insp-row { display: flex; gap: 6px; margin-top: 10px; }
+    .insp-row.wrap { flex-wrap: wrap; } /* long button labels go onto a second line, not off the panel */
     .insp-row .tbtn { flex: 1; border: 1px solid var(--border); text-align: center; font-size: 12px; }
     .insp-row .tbtn.danger:hover { border-color: #f85149; color: #f85149; }
-    #inspector .empty, #camera-panel .empty, #controls-panel .empty { padding: 4px 0; color: var(--dim); }
+    .panel .empty { padding: 4px 0; color: var(--dim); }
 
     /* ---- property rows (sliders / colors / selects, shared by panels) ---- */
     .prop-row { display: grid; grid-template-columns: 70px 1fr 34px; gap: 6px; align-items: center; margin-bottom: 6px; }
@@ -126,8 +226,7 @@
     .check-row input { accent-color: var(--accent); }
 
     /* ---- controls panel (right, below inspector) ---- */
-    #controls-panel { top: calc(64px + min(40vh, calc(100vh - 420px)) + 10px); right: 10px; width: 250px; padding-bottom: 10px; height: min(42vh, calc(100vh - 240px)); overflow-y: auto; z-index: 10; }
-    #controls-panel .body { padding: 8px 12px; }
+    .panel .body { padding: 8px 12px; }
     .bind-row { display: grid; grid-template-columns: 62px 1fr; gap: 6px; align-items: center; margin-bottom: 5px; }
     .bind-row label { color: var(--dim); font-size: 12px; text-transform: capitalize; }
     .bind-btn {
@@ -136,6 +235,352 @@
       cursor: pointer; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
     }
     .bind-btn.listening { border-color: var(--accent); color: var(--accent); }
+    .ctl-num { flex: 1; color: var(--dim); font-size: 11px; }
+    .ctl-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+    .ctl-chip {
+      display: inline-flex; align-items: center; gap: 2px; padding: 1px 1px 1px 5px;
+      border: 1px solid var(--border); border-radius: 5px; background: #0d1117;
+    }
+    .ctl-chip .ctl-ico { font-size: 11px; color: var(--dim); }
+    .ctl-chip .bind-btn { border: none; background: transparent; padding: 1px 4px; max-width: 90px; }
+    .ctl-chip select, .ctl-chip input {
+      width: 62px; border: none; background: transparent; color: var(--text);
+      font: inherit; font-size: 12px; padding: 1px 2px;
+    }
+    .ctl-chip select option { background: #0d1117; }
+    .ctl-add-input { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+    .ctl-add-input .tbtn { font-size: 11px; padding: 1px 6px; border: 1px dashed var(--border); color: var(--dim); }
+    .ctl-add-input .tbtn:hover { color: var(--accent); border-color: var(--accent); }
+    .gp-head.ctl-do { margin-top: 6px; }
+
+    /* ---- New game dialog ---- */
+    .modal {
+      position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+      padding: 16px; background: rgba(5, 7, 11, 0.72);
+    }
+    .modal[hidden] { display: none; }
+    .modal-box {
+      width: min(760px, 100%); max-height: 90vh; overflow: auto; padding: 18px 20px;
+      background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); font-family: system-ui, sans-serif;
+    }
+    .modal-box h2 { margin: 0 0 4px; font-size: 18px; }
+    .modal-sub { margin: 0 0 14px; color: var(--dim); font-size: 12px; line-height: 1.45; }
+    .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 10px; }
+    .tpl-card {
+      display: flex; flex-direction: column; gap: 6px; padding: 12px; text-align: left; cursor: pointer;
+      appearance: none; font: inherit; color: var(--text);
+      background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 10px;
+    }
+    .tpl-card:hover, .tpl-card:focus-visible { border-color: var(--accent); background: var(--accent-dim); outline: none; }
+    .tpl-emoji { font-size: 26px; line-height: 1; }
+    .tpl-name { font-weight: 600; font-size: 14px; }
+    .tpl-blurb { color: var(--dim); font-size: 12px; line-height: 1.4; flex: 1; }
+    .tpl-keys { color: var(--accent); font-size: 11px; }
+    .modal-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+    .lang-box { width: min(980px, 100%); }
+    .lang-scroll { overflow: auto; max-height: 62vh; border: 1px solid var(--border); border-radius: 8px; }
+    #lang-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    #lang-table th, #lang-table td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: start; vertical-align: middle; }
+    #lang-table tbody th { font-weight: 400; color: var(--text); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #lang-table thead th { position: sticky; top: 0; background: var(--panel); color: var(--dim); z-index: 1; }
+    #lang-table input { width: 100%; box-sizing: border-box; min-width: 140px; }
+    #lang-table input.lang-todo { border-color: rgba(240, 192, 94, 0.55); }
+    #lang-table .lang-engine th[colspan] { color: var(--dim); padding-top: 12px; font-weight: 600; }
+    .modal-actions .tbtn { border: 1px solid var(--border); }
+
+    /* ---- Levels panel ---- */
+    #level-list { list-style: none; margin: 0 0 4px; padding: 0; }
+    .lvl-row {
+      display: grid; grid-template-columns: 18px 14px 1fr repeat(4, auto); gap: 2px; align-items: center;
+      padding: 1px 3px; margin-bottom: 2px; border: 1px solid transparent; border-radius: 5px;
+    }
+    .lvl-row.current { border-color: var(--accent); background: var(--accent-dim); }
+    .lvl-start { appearance: none; border: none; background: transparent; color: var(--dim); cursor: pointer; font-size: 14px; padding: 0; }
+    .lvl-start.on { color: #f6a435; }
+    .lvl-num { color: var(--dim); font-size: 11px; text-align: right; padding-right: 3px; }
+    .lvl-name {
+      min-width: 0; background: transparent; border: 1px solid transparent; border-radius: 4px;
+      color: var(--text); font: inherit; font-size: 12px; padding: 2px 4px; cursor: pointer;
+    }
+    .lvl-row.current .lvl-name { cursor: text; }
+    .lvl-name:focus { outline: none; border-color: var(--accent); background: #0d1117; }
+    .lvl-btn { font-size: 12px; padding: 0 2px; }
+    .lvl-btn:disabled { opacity: 0.25; cursor: default; }
+
+    /* ---- Color & Texture panel ---- */
+    .mat-panel input[type="number"] {
+      width: 100%; background: #0d1117; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text); font: inherit; font-size: 12px; padding: 2px 5px;
+    }
+    .mat-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; margin: 0 0 6px; }
+    .tex-btn { border: 1px solid var(--border); padding: 1px 7px; font-size: 11px; }
+    .tex-tools { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+    .tex-tools select {
+      background: #0d1117; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text); font: inherit; font-size: 11px; padding: 1px 4px;
+    }
+    .tex-slot { display: grid; grid-template-columns: 76px 1fr auto auto; gap: 4px; align-items: center; margin-bottom: 4px; font-size: 12px; }
+    .tex-slot .tex-label { color: var(--dim); }
+    .tex-slot.filled .tex-label { color: var(--text); }
+    .tex-slot .tex-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+    .tex-slot.filled .tex-name { color: var(--accent); }
+    .tex-slot .tex-name small { display: block; color: var(--dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+    .tex-slot .gp-x:disabled { opacity: 0.25; cursor: default; }
+    .tex-sub, .tex-maker { border-left: 2px solid var(--accent-dim); padding-left: 6px; margin: 0 0 6px 4px; }
+    .tex-maker { margin-top: 6px; }
+    .tex-colors { grid-column: 2 / 4; display: flex; gap: 6px; align-items: center; }
+    .tex-report { color: var(--dim); font-size: 11px; margin: 0 0 6px; white-space: pre-line; }
+    .gp-head .gp-if { flex: none; white-space: nowrap; }
+    .gp-head select.gp-op {
+      flex: none; width: auto; max-width: 96px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+      color: #6fb3ff; border-color: rgba(111, 179, 255, 0.45);
+    }
+    .gp-or-group { border-top: 2px dashed rgba(111, 179, 255, 0.55); margin-top: 8px; padding-top: 6px; }
+    .gp-else .gp-do { color: #f0a35e; }
+    /* a terrain's or a building's settings (generator-section.js) */
+    .gen-section { margin: 4px 0 8px; padding: 2px 8px 6px; border: 1px solid var(--border); border-radius: 6px; }
+    .gen-group { margin: 8px 0 2px; color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .gen-section .prop-row input[type="number"] { width: 72px; }
+    .gen-dice { padding: 2px 6px; margin-left: 4px; }
+    .phys-parts .part-list { max-height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; }
+    .part-row { display: grid; grid-template-columns: 1fr 132px; gap: 6px; align-items: center; padding: 2px 0; font-size: 11px; }
+    .part-row:hover { background: rgba(57, 197, 207, 0.08); }
+    .part-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .part-row select { font-size: 11px; }
+    .ctl-steps { margin-top: 6px; }
+    /* an Only if's own Do's: if yes / if not (controls-panel.js branchesHtml) */
+    .ctl-branch { margin: 4px 0 4px 10px; border-left: 2px solid var(--accent); }
+    .ctl-branch-no { border-left-color: #f47067; }
+    .ctl-branch-no .gp-do { color: #f47067; }
+    .ctl-branch-add { display: flex; gap: 4px; margin-top: 4px; }
+    .ctl-steps > .tbtn { margin-top: 4px; border: 1px dashed var(--border); color: var(--dim); }
+    .ctl-steps > .tbtn:hover { color: var(--accent); border-color: var(--accent); }
+    .ctl-step { margin-top: 6px; }
+    .pass-list { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+    .pass-chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 2px 1px 7px; border-radius: 10px;
+      background: rgba(120, 170, 255, 0.14); border: 1px solid rgba(120, 170, 255, 0.35); font-size: 11px; }
+    .pass-chip .gp-x { padding: 0 4px; }
+    .pass-none { color: var(--dim); font-size: 11px; }
+    .pass-list select { flex: 1 1 100%; }
+    .script-api { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
+    .script-api th { text-align: left; font: 11px ui-monospace, Consolas, monospace; color: var(--accent); padding: 2px 6px 2px 0; white-space: nowrap; vertical-align: top; }
+    .script-api td { color: var(--dim); padding: 2px 0; }
+    .env-more { margin: 6px 0 2px; }
+    .env-more > summary { cursor: pointer; color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; padding: 4px 0; list-style-position: inside; }
+    .gp-warn { color: #f0c05e; font-size: 11px; line-height: 1.4; margin: 2px 0 4px; }
+    .gp-warn .tbtn { padding: 1px 6px; font-size: 11px; margin: 0 2px; border: 1px solid #f0c05e88; color: #f0c05e; }
+    .ctl-only { margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 6px; }
+    .tex-choose { border: 1px solid var(--border); border-radius: 6px; padding: 6px; margin: 0 0 6px; }
+    .tex-choose-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; margin-bottom: 4px; }
+    .tex-choose-head b { color: var(--text); font-weight: 600; }
+    .tex-choice {
+      display: grid; grid-template-columns: 30px 1fr auto; gap: 6px; align-items: center; width: 100%;
+      background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--text);
+      font: inherit; font-size: 12px; padding: 3px; cursor: pointer; text-align: left;
+    }
+    .tex-choice:hover, .tex-choice:focus-visible { border-color: var(--accent); background: rgba(255,255,255,0.03); }
+    .tex-choice small { color: var(--dim); font-size: 10px; }
+    .tex-choice-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tex-thumb { width: 30px; height: 30px; border-radius: 4px; border: 1px solid var(--border); background-size: cover; background-position: center; }
+
+    /* ---- sound cards (Audio panel) ---- */
+    .snd-card {
+      border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+      margin-bottom: 8px; background: rgba(255,255,255,0.02);
+    }
+    .snd-card.playing { border-color: var(--accent); }
+    .snd-head { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+    .snd-name {
+      flex: 1; min-width: 0; background: #0d1117; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font: inherit; font-size: 12px; padding: 2px 5px;
+    }
+    .snd-mini { border: 1px solid var(--border); padding: 1px 6px; font-size: 11px; }
+    .snd-source { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; margin-bottom: 5px; }
+    .snd-source .snd-dim { color: var(--dim); font-size: 11px; margin-right: auto; }
+    .snd-synth { border-left: 2px solid var(--accent-dim); padding-left: 6px; margin: 0 0 6px; }
+    .snd-checks { display: flex; flex-wrap: wrap; gap: 10px; }
+    .snd-checks .check-row { margin: 2px 0; }
+    .ctl-info { color: var(--dim); cursor: help; font-size: 13px; }
+    .ctl-info:hover { color: var(--accent); }
+    /* on-screen game buttons sit between the docks, above the status bar */
+    body.playing {
+      --t3-touch-left: 262px; --t3-touch-right: 302px; --t3-touch-bottom: var(--status-h, 72px);
+      /* the game's variables keep clear of the docks and the status bar too */
+      --t3-hud-left: 262px; --t3-hud-right: 302px; --t3-hud-bottom: calc(var(--status-h, 72px) + 8px);
+    }
+
+    /* ---- components & rules (inspector) ---- */
+    .gp-card {
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 6px 8px; margin-bottom: 6px; background: rgba(255,255,255,0.02);
+    }
+    .gp-card.gp-rule { border-left: 3px solid var(--accent); }
+    .gp-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .gp-head select { flex: 1; min-width: 0; background: #0d1117; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font: inherit; font-size: 12px; padding: 2px 4px; }
+    .gp-title { flex: 1; font-size: 12px; font-weight: 600; color: var(--accent); }
+    .gp-hint { color: var(--dim); font-size: 11px; margin-bottom: 5px; }
+    .prop-row:has(.state-clips) { display: block; }
+    .state-clips { margin-top: 4px; }
+    .sc-row { display: grid; grid-template-columns: 1fr 1fr 1fr 20px; gap: 3px; margin-bottom: 3px; }
+    .sc-row input, .sc-row select { min-width: 0; width: 100%; font-size: 11px; }
+    /* the asset library */
+    .lib-top { display: flex; gap: 6px; margin-bottom: 6px; }
+    .lib-top input { flex: 1; min-width: 0; background: #0d1117; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 12px; }
+    .lib-kinds { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+    .lib-kinds .tbtn { padding: 2px 7px; font-size: 11px; }
+    .lib-kinds .tbtn.active { border-color: var(--accent); color: var(--accent); }
+    .lib-kinds small { color: var(--dim); }
+    .lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; max-height: 340px; overflow-y: auto; }
+    .lib-card { position: relative; border: 1px solid var(--border); border-radius: 6px; padding: 4px; cursor: pointer; background: #0d1117; }
+    .lib-card:hover { border-color: var(--accent); }
+    .lib-pic { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #161b22; overflow: hidden; }
+    .lib-pic img { width: 100%; height: 100%; object-fit: contain; }
+    .lib-ico { font-size: 28px; }
+    .lib-name { font-size: 11px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lib-meta { font-size: 10px; color: var(--dim); display: flex; justify-content: space-between; gap: 4px; }
+    .lib-uses { color: var(--accent); }
+    .lib-uses.none, .lib-tag { color: var(--dim); }
+    .lib-actions { position: absolute; top: 2px; right: 2px; display: none; gap: 2px; }
+    .lib-card:hover .lib-actions { display: flex; }
+    .lib-actions .gp-x { background: rgba(13,17,23,0.85); }
+    .lib-settings { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+    .brush-tools { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+    .brush-tools .tbtn { flex: 1 0 30%; padding: 4px 6px; font-size: 11px; }
+    .brush-tools .tbtn.active { border-color: var(--accent); color: var(--accent); }
+    .brush-panel { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px 6px; margin-bottom: 8px; }
+    /* Screens & dialogue panel */
+    .scr-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+    .scr-tabs .tbtn { flex: 1; }
+    .scr-tabs .tbtn.active { border-color: var(--accent); color: var(--accent); }
+    .scr-pick { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+    .scr-pick select { flex: 1; min-width: 0; }
+    #screens-body textarea { width: 100%; box-sizing: border-box; resize: vertical; background: #0d1117; color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px; font: inherit; font-size: 12px; padding: 4px 6px; grid-column: 2 / -1; }
+    #screens-body input.bad { border-color: #f47067; }
+    .scr-preview { margin-top: 8px; }
+    .dlg-line.on { border-color: var(--accent); }
+    .dlg-line .gp-title { cursor: pointer; }
+    .dlg-choice { border-left: 2px solid var(--border); padding-left: 6px; margin: 6px 0; }
+    .dlg-choice-head { display: flex; align-items: center; justify-content: space-between; color: var(--dim); font-size: 11px; margin-bottom: 3px; }
+    .dlg-pair { display: flex; gap: 4px; min-width: 0; }
+    .dlg-pair input { flex: 1; min-width: 0; width: auto !important; }
+    .gp-legend { color: var(--dim); font-size: 11px; margin-bottom: 6px; }
+    .gp-x {
+      appearance: none; border: none; background: transparent; color: var(--dim);
+      cursor: pointer; font-size: 15px; line-height: 1; padding: 0 3px;
+    }
+    .gp-x:hover { color: #f85149; }
+    .gp-sub { border-left: 2px solid var(--border); margin: 5px 0 0 6px; padding-left: 7px; }
+    .gp-when, .gp-do, .gp-if {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+      padding: 1px 4px; border-radius: 3px; background: var(--accent-dim);
+    }
+    .gp-when { color: var(--accent); }
+    .gp-do { color: #f6a435; }
+    .gp-if { color: #b083f0; }
+    .gp-card .prop-row { grid-template-columns: 74px 1fr; margin-bottom: 4px; }
+    .gp-card .prop-row input[type="text"],
+    .gp-card .prop-row input[type="number"] {
+      width: 100%; background: #0d1117; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font: inherit; font-size: 12px; padding: 2px 5px;
+    }
+    .gp-card .prop-row select { grid-column: 2 / 3; }
+    .gp-card .prop-row input[type="checkbox"] { justify-self: start; accent-color: var(--accent); }
+
+    /* ---- lighting panel ---- */
+    .light-card {
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 6px 8px; margin-bottom: 6px; background: rgba(255,255,255,0.02);
+    }
+    .light-card.selected { border-color: var(--accent); }
+    .light-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .light-name {
+      flex: 1; min-width: 0; text-align: left; appearance: none; border: none;
+      background: transparent; color: var(--text); font: inherit; font-size: 12px;
+      cursor: pointer; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .light-name:hover { color: var(--accent); }
+    .env-presets { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
+    .env-presets .tbtn { border: 1px solid var(--border); padding: 4px 6px; font-size: 12px; }
+    .light-head input[type="color"] {
+      width: 34px; height: 22px; padding: 0; border: 1px solid var(--border);
+      border-radius: 4px; background: #0d1117; cursor: pointer;
+    }
+
+    /* ---- variables (game panel) ---- */
+    #var-list { margin: 0 0 6px; }
+    /* line 1: name, type, look, delete — line 2: its value, how it shows */
+    .var-row { display: grid; grid-template-columns: 1fr 76px 20px 20px; gap: 5px; margin-bottom: 8px; }
+    .var-row [data-var-name] { grid-area: 1 / 1; }
+    .var-row [data-var-type] { grid-area: 1 / 2; }
+    .var-row .var-look-btn { grid-area: 1 / 3; }
+    .var-row [data-var-del] { grid-area: 1 / 4; }
+    .var-row .var-value { grid-area: 2 / 1; }
+    .var-row [data-var-show] { grid-area: 2 / 2 / 3 / 5; }
+    .var-row .var-value > * { width: 100%; }
+    .var-row .var-literal { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+    .var-look-btn { font-size: 12px; opacity: 0.6; }
+    .var-look-btn.own { opacity: 1; color: var(--accent); }
+    .var-look-btn.open { opacity: 1; background: rgba(77, 208, 166, 0.14); }
+    .var-look { grid-column: 1 / -1; padding: 6px 8px; margin: 2px 0 6px; border: 1px solid var(--border); border-radius: 6px; }
+    .var-look .prop-row input[type="text"], .var-look .prop-row input[type="number"] { grid-column: 2 / 4; width: 100%; }
+    .var-look .check-row { display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
+    .var-row .var-look .check-row input { width: auto; }
+    .var-row .var-look input[type="color"] { width: 44px; height: 22px; padding: 0 2px; }
+    /* the HUD's preview: a little screen, the HUD drawn on it at half size */
+    .hud-preview { position: relative; aspect-ratio: 16 / 9; margin: 0 0 8px; border-radius: 6px; overflow: hidden;
+      border: 1px solid var(--border); background: linear-gradient(#6f9fd8 0 55%, #5b7f43 55%); }
+    .hud-preview .hud-preview-screen { position: absolute; left: 0; top: 0; width: 200%; height: 200%; transform: scale(0.5); transform-origin: 0 0; display: block;
+      --t3-hud-top: 12px; --t3-hud-left: 12px; --t3-hud-right: 12px; --t3-hud-bottom: 12px; }
+    .hud-preview-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 22px; }
+    .var-row select {
+      width: 100%; background: #0d1117; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text); font: inherit; font-size: 11px; padding: 2px 3px;
+    }
+    .var-max { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; justify-content: flex-end; color: var(--dim); font-size: 11px; }
+    .var-row .var-max input { width: 60px; }
+    .game-ui .prop-row input[type="text"] {
+      grid-column: 2 / 4; width: 100%; background: #0d1117; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font: inherit; font-size: 12px; padding: 3px 5px;
+    }
+    body.playing { --t3-hud-top: var(--top); } /* the game HUD sits below the toolbar */
+    .var-row input {
+      width: 100%; background: #0d1117; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font: inherit; font-size: 12px; padding: 2px 5px;
+    }
+
+    /* ---- play-mode HUD ---- */
+    #hud {
+      position: fixed; top: var(--top); left: 50%; transform: translateX(-50%);
+      display: none; gap: 14px; padding: 7px 16px; z-index: 12;
+      font-family: system-ui, sans-serif; font-size: 14px; color: var(--text);
+      background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
+      pointer-events: none;
+    }
+    body.playing #hud { display: flex; }
+    #hud .hud-item { display: flex; gap: 6px; align-items: baseline; }
+    #hud .hud-name { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    #hud .hud-value { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    #outcome {
+      position: fixed; inset: 0; display: none; z-index: 30;
+      align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+      background: rgba(11, 14, 20, 0.82); font-family: system-ui, sans-serif;
+      /* the dim layer must not swallow clicks, or winning makes Stop unreachable */
+      pointer-events: none;
+    }
+    #outcome.show { display: flex; }
+    #outcome > * { pointer-events: auto; }
+    #outcome .msg { font-size: 34px; font-weight: 700; color: var(--accent); }
+    #outcome.lose .msg { color: #f47067; }
+    #outcome .sub { color: var(--dim); font-size: 13px; }
+    #outcome button {
+      appearance: none; border: 1px solid var(--accent); background: var(--accent-dim);
+      color: var(--accent); font: inherit; padding: 7px 18px; border-radius: 7px; cursor: pointer;
+    }
 
     /* ---- resize handle ---- */
     .resize-handle {
@@ -158,6 +603,7 @@
     /* ---- status bar (bottom-left) ---- */
     #status {
       bottom: 10px; left: 10px; padding: 6px 12px; color: var(--dim); font-size: 12px; z-index: 10;
+      max-width: calc(100vw - 304px); /* never slide under the right dock */
     }
     #status b { color: var(--accent); font-weight: 600; }
     #status .k {
@@ -165,13 +611,38 @@
       border-radius: 4px; padding: 0 5px; font-size: 11px; color: var(--text);
     }
 
+    /* ---- notices: short messages with a choice, above the status bar ---- */
+    #notices {
+      position: fixed; left: 50%; bottom: 52px; transform: translateX(-50%); z-index: 30;
+      display: flex; flex-direction: column; gap: 8px; align-items: center;
+      width: min(560px, calc(100vw - 32px)); pointer-events: none;
+    }
+    .notice {
+      pointer-events: auto; width: 100%; box-sizing: border-box;
+      background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      border-radius: 8px; padding: 10px 12px; color: var(--text);
+      font: 13px/1.45 system-ui, sans-serif; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+    }
+    .notice.warn { border-left-color: #f6a435; }
+    .notice.error { border-left-color: #f47067; }
+    .notice-text { white-space: pre-line; }
+    .notice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .notice-actions .tbtn { border: 1px solid var(--border); }
+    .notice-actions .tbtn.primary { border-color: var(--accent); color: var(--accent); }
+
+    /* ---- drop models from the desktop onto the view ---- */
+    #drop-zone {
+      position: fixed; inset: 10px; z-index: 40; pointer-events: none;
+      display: flex; align-items: center; justify-content: center;
+      border: 2px dashed var(--accent); border-radius: 14px; background: rgba(77, 208, 166, 0.07);
+      color: var(--text); font: 600 18px/1.5 system-ui, sans-serif; text-align: center;
+    }
+    #drop-zone[hidden] { display: none; }
+    #drop-zone small { display: block; color: var(--dim); font-weight: 400; font-size: 13px; }
+
     /* ---- play mode: editing is locked ---- */
     #btn-play.playing { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
-    body.playing #hierarchy,
-    body.playing #camera-panel,
-    body.playing #asset-browser,
-    body.playing #inspector,
-    body.playing #controls-panel { opacity: 0.45; pointer-events: none; }
+    body.playing .dock > .panel { opacity: 0.45; pointer-events: none; }
     body.playing .gizmo-btn,
     body.playing #btn-load-glb,
     body.playing #btn-undo,
@@ -179,14 +650,136 @@
     body.playing #btn-save,
     body.playing #btn-load { opacity: 0.45; pointer-events: none; }
     body.playing #status { border-color: var(--accent); }
+
+    /* ---- the Tools drawer (src/app/tools-drawer.js) ---- */
+    #tools { z-index: 75; display: flex; /* over the game's on-screen buttons and screens: always reachable */ flex-direction: column; overflow: hidden; user-select: none; }
+    #tools[hidden] { display: none; }
+    #tools .tl-grip { height: 6px; cursor: ns-resize; flex: none; }
+    #tools .tl-grip:hover { background: var(--accent-dim); }
+    #tools .tl-tabs { display: flex; gap: 2px; align-items: center; padding: 0 8px; border-bottom: 1px solid var(--border); flex: none; }
+    #tools .tl-tab { background: none; border: none; border-bottom: 2px solid transparent; color: var(--dim); padding: 4px 10px 5px; font: inherit; cursor: pointer; }
+    #tools .tl-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+    #tools .tl-note { flex: 1; }
+    #tools .tl-close { background: none; border: none; color: var(--dim); font-size: 18px; cursor: pointer; padding: 0 4px; }
+    #tools .tl-body { flex: 1; min-height: 0; position: relative; }
+    #tools .tl-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
+    #tools .tl-pane[hidden] { display: none; }
+    #tools .tl-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 5px 8px; flex: none; }
+    #tools .tl-hint { color: var(--dim); font-size: 11px; }
+    #tools .tl-check { display: inline-flex; gap: 4px; align-items: center; color: var(--dim); font-size: 12px; }
+    #tools .tl-input, #tools .tl-select { background: #0d1117; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; font: 12px system-ui, sans-serif; }
+    #tools .tl-cols { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 0 8px 8px; }
+    #tools h5 { margin: 8px 0 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; display: flex; gap: 6px; align-items: center; }
+    #tools code { background: #0d1117; padding: 0 3px; border-radius: 3px; }
+
+    /* the Logic graph */
+    .lg-view { flex: 1; position: relative; overflow: hidden; background:
+      radial-gradient(circle, rgba(139,148,158,0.18) 1px, transparent 1px) 0 0 / 22px 22px, #0b0e14; cursor: grab; margin: 0 8px 8px; border-radius: 6px; border: 1px solid var(--border); }
+    .lg-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+    .lg-edges { position: absolute; left: 0; top: 0; overflow: visible; color: #8b949e; }
+    .lg-edge { cursor: pointer; }
+    .lg-edge .lg-hit { stroke: transparent; stroke-width: 12; fill: none; }
+    .lg-edge .lg-path { fill: none; stroke: currentColor; stroke-width: 1.6; }
+    .lg-edge.dashed .lg-path { stroke-dasharray: 6 4; }
+    .lg-e-event { color: #f0883e; } .lg-e-state { color: #d2a8ff; } .lg-e-write { color: #58a6ff; } .lg-e-read { color: #3b6ea5; }
+    .lg-e-screen, .lg-e-dialogue { color: #3fb950; } .lg-e-spawn, .lg-e-level { color: #e3b341; }
+    .lg-edge.sel .lg-path { stroke-width: 3; }
+    .lg-edge.lg-pulse .lg-path { stroke-width: 4; filter: drop-shadow(0 0 4px currentColor); }
+    .lg-label { fill: currentColor; font: 11px system-ui, sans-serif; text-anchor: middle; paint-order: stroke; stroke: #0b0e14; stroke-width: 3px; }
+    .lg-drawing { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 4; fill: none; }
+    .lg-node { position: absolute; background: #161b22; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; color: var(--text); cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
+    .lg-head { display: flex; gap: 6px; align-items: center; padding: 4px 8px; background: #21262d; border-radius: 6px 6px 0 0; font-weight: 600; font-size: 11px; height: 26px; }
+    .lg-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lg-k-var .lg-head { background: #172a45; } .lg-k-screen .lg-head, .lg-k-dialogue .lg-head { background: #17331f; }
+    .lg-k-controls .lg-head { background: #2d2340; } .lg-k-prefab .lg-head, .lg-k-level .lg-head { background: #3a2e12; }
+    .lg-line { position: relative; padding: 0 10px; height: 16px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lg-line:last-child { margin-bottom: 6px; }
+    .lg-when { color: #f0c05e; } .lg-if { color: #a5d6ff; } .lg-else { color: #d2a8ff; } .lg-none, .lg-data { color: var(--dim); }
+    .lg-port { position: absolute; right: -5px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: #f0883e; }
+    .lg-bp { color: #484f58; cursor: pointer; font-size: 13px; line-height: 1; }
+    .lg-bp.on { color: #f85149; }
+    .lg-link { cursor: crosshair; color: var(--accent); font-size: 14px; }
+    .lg-count { color: var(--accent); font-weight: 400; }
+    .lg-node.lg-hot { border-color: var(--accent); box-shadow: 0 0 12px rgba(77,208,166,0.55); }
+    .lg-node.lg-failed { border-color: #f85149; }
+    .lg-node.lg-stopped { border-color: #f85149; box-shadow: 0 0 0 2px #f85149; }
+    .lg-node.lg-target { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+    .lg-node.lg-flash { animation: lg-flash 1.2s; }
+    @keyframes lg-flash { 0%, 60% { box-shadow: 0 0 0 3px #f0c05e; } }
+    .lg-pop { position: absolute; z-index: 2; background: #161b22; border: 1px solid var(--border); border-radius: 6px; padding: 8px; max-width: 300px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); cursor: default; }
+    .lg-pop .tl-bar { padding: 6px 0 0; }
+    .lg-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 12px; pointer-events: none; }
+    .lg-empty[hidden] { display: none; }
+    .gp-rule.gp-flash { animation: lg-flash 1.2s; }
+
+    /* the Debugger */
+    .db-status { color: var(--dim); font-size: 12px; margin-left: auto; }
+    .db-status.stopped { color: #f85149; }
+    .db-trace { flex: 1.4; overflow: auto; font: 11px/1.5 ui-monospace, Consolas, monospace; background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; user-select: text; }
+    .db-row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .db-row[data-key] { cursor: pointer; }
+    .db-row[data-key]:hover { background: #161b22; }
+    .db-t { color: var(--dim); display: inline-block; width: 52px; }
+    .db-row b { color: var(--text); font-weight: 600; margin-right: 4px; }
+    .db-rule { color: #c9d1d9; } .db-event { color: #f0883e; } .db-log { color: #a5d6ff; } .db-error { color: #f85149; }
+    .db-side { flex: 1; overflow: auto; min-width: 220px; }
+    .db-bp { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; color: #f85149; }
+    .db-var { display: flex; gap: 6px; align-items: center; margin: 2px 0; font-size: 12px; }
+    .db-var span { width: 40%; overflow: hidden; text-overflow: ellipsis; }
+    .db-var input { flex: 1; min-width: 0; }
+    .db-table { width: 100%; font-size: 11px; border-collapse: collapse; user-select: text; }
+    .db-table th { text-align: left; color: var(--dim); font-weight: 400; padding: 1px 6px 1px 0; white-space: nowrap; vertical-align: top; }
+    .db-table td { word-break: break-word; }
+
+    /* the Profiler */
+    .pf-left { flex: 1.4; display: flex; flex-direction: column; min-width: 0; }
+    .pf-chart { flex: 1; width: 100%; min-height: 60px; background: #0d1117; border: 1px solid var(--border); border-radius: 6px; }
+    .pf-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding-top: 6px; font-size: 11px; color: var(--dim); }
+    .pf-key i, .pf-slow i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+    .pf-key b { color: var(--text); font-weight: 600; }
+    .pf-right { flex: 1; overflow: auto; min-width: 220px; font-size: 12px; }
+    .pf-slow { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .pf-slow th { color: var(--dim); font-weight: 400; text-align: right; }
+    .pf-slow td { padding: 1px 4px; } .pf-slow td + td { text-align: right; font-variant-numeric: tabular-nums; }
+    .pf-draw { color: var(--dim); font-size: 11px; line-height: 1.6; }
+    .pf-fps { font-size: 12px; color: var(--dim); }
+    .pf-fps b { color: var(--accent); }
+
+    /* the Modules */
+    .md-list { width: 200px; flex: none; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+    .md-item { padding: 4px 8px; border-radius: 4px; cursor: pointer; font: 12px ui-monospace, Consolas, monospace; }
+    .md-item:hover { background: #161b22; } .md-item.active { background: var(--accent-dim); color: var(--accent); }
+    .md-help { line-height: 1.5; }
+    .md-edit { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .md-edit.none { opacity: 0.4; pointer-events: none; }
+    .md-edit .tl-bar { padding: 0 0 5px; }
+    .md-code { flex: 1; resize: none; background: #0d1117; border: 1px solid var(--border); border-radius: 6px; color: var(--text); font: 12px/1.45 ui-monospace, Consolas, monospace; padding: 6px 8px; tab-size: 2; user-select: text; }
+    .md-msg { font-size: 12px; padding-top: 4px; min-height: 18px; }
+    .md-msg.good { color: var(--accent); } .md-msg.bad { color: #f85149; }
   </style>
   <script type="importmap">
     {
       "imports": {
         "three": "./lib/three.module.js",
         "three/addons/loaders/GLTFLoader.js": "./lib/GLTFLoader.js",
+        "three/addons/loaders/DRACOLoader.js": "./lib/loaders/DRACOLoader.js",
+        "three/addons/loaders/KTX2Loader.js": "./lib/loaders/KTX2Loader.js",
+        "three/addons/libs/meshopt_decoder.module.js": "./lib/libs/meshopt_decoder.module.js",
         "three/addons/controls/TransformControls.js": "./lib/TransformControls.js",
-        "../utils/BufferGeometryUtils.js": "./lib/utils/BufferGeometryUtils.js"
+        "three/addons/postprocessing/EffectComposer.js": "./lib/postprocessing/EffectComposer.js",
+        "three/addons/postprocessing/RenderPass.js": "./lib/postprocessing/RenderPass.js",
+        "three/addons/postprocessing/UnrealBloomPass.js": "./lib/postprocessing/UnrealBloomPass.js",
+        "three/addons/postprocessing/OutputPass.js": "./lib/postprocessing/OutputPass.js",
+        "three/addons/postprocessing/ShaderPass.js": "./lib/postprocessing/ShaderPass.js",
+        "three/addons/postprocessing/Pass.js": "./lib/postprocessing/Pass.js",
+        "three/addons/postprocessing/GTAOPass.js": "./lib/postprocessing/GTAOPass.js",
+        "three/addons/postprocessing/BokehPass.js": "./lib/postprocessing/BokehPass.js",
+        "three/addons/loaders/OBJLoader.js": "./lib/loaders/OBJLoader.js",
+        "three/addons/loaders/MTLLoader.js": "./lib/loaders/MTLLoader.js",
+        "three/addons/loaders/FBXLoader.js": "./lib/loaders/FBXLoader.js",
+        "three/addons/loaders/STLLoader.js": "./lib/loaders/STLLoader.js",
+        "three/addons/exporters/GLTFExporter.js": "./lib/exporters/GLTFExporter.js",
+        "three/addons/utils/SkeletonUtils.js": "./lib/utils/SkeletonUtils.js"
       }
     }
   </script>
@@ -199,12 +792,14 @@
     <button class="tbtn gizmo-btn active" data-mode="translate" title="Move gizmo (G)">↖ Move <span class="k">G</span></button>
     <button class="tbtn gizmo-btn" data-mode="rotate" title="Rotate gizmo (R)">⟳ Rotate <span class="k">R</span></button>
     <button class="tbtn gizmo-btn" data-mode="scale" title="Scale gizmo (S)">⤢ Scale <span class="k">S</span></button>
+    <button class="tbtn" id="btn-pan" title="Hand tool — left-drag pans instead of orbiting (H, or hold Space)">✋ Pan <span class="k">H</span></button>
     <div class="sep"></div>
     <button class="tbtn cam-btn active" data-mode="orbit" title="Orbit camera (1)">Orbit <span class="k">1</span></button>
     <button class="tbtn cam-btn" data-mode="follow" title="Follow camera — tied to target (2)">Follow <span class="k">2</span></button>
+    <button class="tbtn cam-btn" data-mode="fps" title="First person — look with the mouse from the player's eyes; W walks where you look (3)">First person <span class="k">3</span></button>
     <button class="tbtn cam-btn" data-mode="free" title="Fly camera (4)">Fly <span class="k">4</span></button>
     <div class="sep"></div>
-    <button class="tbtn" id="btn-load-glb" title="Load a .glb model from disk (L)">＋ GLB <span class="k">L</span></button>
+    <button class="tbtn" id="btn-load-glb" title="Add a model: a .glb, or a .gltf with its .bin and textures (L) — or drop files on the view">＋ GLB <span class="k">L</span></button>
     <div class="sep"></div>
     <button class="tbtn" id="btn-undo" title="Undo (Ctrl+Z)">↶ Undo <span class="k">Ctrl+Z</span></button>
     <button class="tbtn" id="btn-redo" title="Redo (Ctrl+Y)">↷ Redo <span class="k">Ctrl+Y</span></button>
@@ -219,133 +814,443 @@
     <button class="tbtn" id="btn-reset-view" title="Reset camera view to origin">⟲ Reset view</button>
     <div class="sep"></div>
     <button class="tbtn" id="btn-export" title="Export standalone game HTML">🚀 Export</button>
+    <button class="tbtn" id="btn-tools" title="Tools: the Logic graph of the level's rules, a Debugger, a Profiler, and script Modules">🧰 Tools</button>
   </div>
 
-  <!-- scene hierarchy -->
-  <div id="hierarchy" class="panel">
-    <h3>Hierarchy</h3>
-    <div class="resize-handle"></div>
-    <div class="add-row">
-      <button class="tbtn" data-add="box">Box</button>
-      <button class="tbtn" data-add="sphere">Sphere</button>
-      <button class="tbtn" data-add="cone">Cone</button>
-      <button class="tbtn" data-add="cylinder">Cyl</button>
-      <button class="tbtn" data-add="torus">Torus</button>
-    </div>
-    <div class="add-row">
-      <button class="tbtn" data-light="directional">☀ Dir</button>
-      <button class="tbtn" data-light="point">💡 Point</button>
-      <button class="tbtn" data-light="spot">🔦 Spot</button>
-      <button class="tbtn" data-light="ambient">◌ Amb</button>
-    </div>
-    <ul id="scene-list"></ul>
-  </div>
-
-  <!-- asset browser: prefabs and reusable assets -->
-  <div id="asset-browser" class="panel">
-    <h3>Asset Browser</h3>
-    <div class="resize-handle"></div>
-    <div class="body">
-      <div class="insp-row" style="margin-bottom:8px">
-        <button class="tbtn" id="btn-save-prefab" title="Save selected object as a reusable prefab">💾 Prefab</button>
+  <!-- ===== left dock: the scene, and the selected object's shape and look ===== -->
+  <div id="dock-left" class="dock">
+    <div id="levels-panel" class="panel">
+      <h3>Levels</h3>
+      <div class="body">
+        <ul id="level-list"></ul>
+        <div class="insp-row"><button class="tbtn" id="level-add">+ Add level</button></div>
+        <div class="gp-legend" style="margin-top:6px">★ is where the game starts. The <b>Go to level</b>
+          rule and the <b>Level exit</b> component move between levels; variables carry over.</div>
       </div>
-      <ul id="asset-list"><li class="empty">No prefabs yet.</li></ul>
+      <div class="resize-handle"></div>
+    </div>
+    <div id="hierarchy" class="panel">
+      <h3>Hierarchy</h3>
+      <ul id="scene-list"></ul>
+      <div class="resize-handle"></div>
+    </div>
+
+    <div id="shape-panel" class="panel">
+      <h3>Shape</h3>
+      <div class="body">
+        <div class="add-row">
+          <button class="tbtn" data-add="box">Box</button>
+          <button class="tbtn" data-add="sphere">Sphere</button>
+          <button class="tbtn" data-add="cone">Cone</button>
+          <button class="tbtn" data-add="cylinder">Cyl</button>
+          <button class="tbtn" data-add="torus">Torus</button>
+          <button class="tbtn" data-make="terrain" title="Ground made from a few settings: a field, hills, a valley, a mountain, an island…">⛰ Terrain</button>
+          <button class="tbtn" data-make="building" title="A house from a few settings: its size and storeys, a door, windows, rooms, stairs, a roof">🏠 Building</button>
+          <button class="tbtn" data-make="scatter" title="Many of one thing over an area, on the ground: a forest, a meadow, rocks, flowers">🌲 Scatter</button>
+        </div>
+        <div id="shape-body"></div>
+        <h4 class="insp-h">Snapping</h4>
+        <div class="prop-row"><label>Grid</label>
+          <input type="range" id="snap-trans" min="0" max="2" step="0.25" value="0" />
+          <span class="val" id="snap-trans-v">off</span></div>
+        <div class="prop-row"><label>Angle</label>
+          <input type="range" id="snap-rot" min="0" max="90" step="15" value="0" />
+          <span class="val" id="snap-rot-v">off</span></div>
+        <div class="prop-row"><label>Scale</label>
+          <input type="range" id="snap-scl" min="0" max="1" step="0.25" value="0" />
+          <span class="val" id="snap-scl-v">off</span></div>
+        <h4 class="insp-h">Gizmo</h4>
+        <div class="prop-row"><label>Sensitivity</label>
+          <input type="range" id="gizmo-sens" min="0.05" max="1" step="0.05" value="0.25" />
+          <span class="val" id="gizmo-sens-v">0.25</span></div>
+      </div>
+      <div class="resize-handle"></div>
+    </div>
+
+    <div id="material-panel" class="panel">
+      <h3>Color &amp; Texture</h3>
+      <div class="body" id="material-body"></div>
+      <div class="resize-handle"></div>
+    </div>
+
+    <div id="lighting-panel" class="panel">
+      <h3>Lighting</h3>
+      <div class="body">
+        <h4 class="insp-h" style="margin-top:0">Environment</h4>
+        <div class="env-presets">
+          <button class="tbtn" data-env-preset="day">☀ Day</button>
+          <button class="tbtn" data-env-preset="golden">🌇 Golden hour</button>
+          <button class="tbtn" data-env-preset="overcast">☁ Overcast</button>
+          <button class="tbtn" data-env-preset="night">🌙 Night</button>
+          <button class="tbtn" data-env-preset="studio">◐ Studio</button>
+          <button class="tbtn" data-env-preset="off" title="No sun or sky — only the lights you add">Off</button>
+        </div>
+        <div class="prop-row" title="Moves the sun, and recolours the light, sky and fog with it">
+          <label>Time</label>
+          <input type="range" id="env-time" min="0" max="24" step="0.1" value="11" />
+          <span class="val" id="env-time-v">11:00</span></div>
+        <div class="prop-row" title="The compass direction the sunlight comes from">
+          <label>Sun from</label>
+          <input type="range" id="env-azimuth" min="0" max="360" step="1" value="135" />
+          <span class="val" id="env-azimuth-v">135°</span></div>
+        <div class="prop-row" title="Greys the sky, softens shadows and makes the sky the main light">
+          <label>Clouds</label>
+          <input type="range" id="env-clouds" min="0" max="1" step="0.01" value="0" />
+          <span class="val" id="env-clouds-v">0%</span></div>
+        <div class="prop-row" title="Overall brightness, like a camera's exposure">
+          <label>Exposure</label>
+          <input type="range" id="env-exposure" min="0.2" max="2.5" step="0.05" value="1" />
+          <span class="val" id="env-exposure-v">1.00</span></div>
+        <div class="prop-row" title="How blurred the edges of shadows are">
+          <label>Softness</label>
+          <input type="range" id="env-softness" min="0" max="1" step="0.01" value="0.35" />
+          <span class="val" id="env-softness-v">35%</span></div>
+        <div class="prop-row" title="How far you can see before things fade into the sky; 0 is no fog">
+          <label>Fog</label>
+          <input type="range" id="env-fog" min="0" max="600" step="10" value="0" />
+          <span class="val" id="env-fog-v">off</span></div>
+        <label class="check-row"><input type="checkbox" id="env-shadows" checked /> Sun casts shadows</label>
+        <details id="env-more" class="env-more">
+          <summary title="Sharper shadows, bloom, and drawing a big level quickly">Shadows, effects &amp; speed</summary>
+        <div class="prop-row" title="How many pixels the sun's shadow picture has: sharper, at a cost on slow devices">
+          <label>Shadow detail</label>
+          <select id="env-shadow-quality">
+            <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+          </select></div>
+        <div class="prop-row" title="How far round the player (or what the editor looks at) shadows reach, sharp. 0 is automatic: a small level is shadowed all at once, a big one (a terrain, a town) sharply round the player — over all of a big level shadows would be coarse, and blocky in bands when the sun is low">
+          <label>Shadow range</label>
+          <input type="range" id="env-shadow-range" min="0" max="300" step="5" value="0" />
+          <span class="val" id="env-shadow-range-v">automatic</span></div>
+        <div class="prop-row" title="How many lamps (point and spot lights with Cast shadows on) cast them at once: the nearest to the camera. Each costs a shadow picture every frame (a point light, six)">
+          <label>Lamp shadows</label>
+          <input type="range" id="env-lamp-shadows" min="0" max="8" step="1" value="4" />
+          <span class="val" id="env-lamp-shadows-v"></span></div>
+        <h4 class="insp-h">Effects</h4>
+        <label class="check-row" title="What is brighter than the threshold glows into the air round it: glowing materials (neon, lava, a lamp), and the sun on white">
+          <input type="checkbox" id="env-bloom" /> Bloom (bright things glow)</label>
+        <div class="prop-row" title="How strongly bright things glow">
+          <label>Glow</label>
+          <input type="range" id="env-bloom-strength" min="0" max="3" step="0.05" value="0.6" />
+          <span class="val" id="env-bloom-strength-v">0.60</span></div>
+        <div class="prop-row" title="How bright something must be to glow: lower, and more things do">
+          <label>From brightness</label>
+          <input type="range" id="env-bloom-threshold" min="0" max="1" step="0.01" value="0.85" />
+          <span class="val" id="env-bloom-threshold-v">85%</span></div>
+        <div class="prop-row" title="How far the glow spreads">
+          <label>Spread</label>
+          <input type="range" id="env-bloom-radius" min="0" max="1" step="0.01" value="0.4" />
+          <span class="val" id="env-bloom-radius-v">40%</span></div>
+        <label class="check-row" title="Corners, creases and where things meet the ground are darkened a little, as real light is there: objects sit in the world instead of floating on it">
+          <input type="checkbox" id="env-ao" /> Ambient occlusion (soft contact shadows)</label>
+        <div class="prop-row" title="How dark the shade in corners is">
+          <label>Shade</label>
+          <input type="range" id="env-ao-strength" min="0" max="1" step="0.05" value="0.8" />
+          <span class="val" id="env-ao-strength-v"></span></div>
+        <div class="prop-row" title="How far from a corner the shade reaches, in metres">
+          <label>Reach</label>
+          <input type="range" id="env-ao-radius" min="0.1" max="3" step="0.05" value="0.6" />
+          <span class="val" id="env-ao-radius-v"></span></div>
+        <label class="check-row" title="What is nearer or farther than the focus is blurred, as through a camera lens: the player sharp against a soft background">
+          <input type="checkbox" id="env-dof" /> Depth of field (blur out of focus)</label>
+        <div class="prop-row" title="What is in focus: the player (seen from behind), what the middle of the view rests on (first person), or a set distance">
+          <label>Focus on</label>
+          <select id="env-dof-focus"><option>the player</option><option>the middle of the view</option><option>a distance</option></select></div>
+        <div class="prop-row" title="How far away is in focus, in metres">
+          <label>Distance</label>
+          <input type="range" id="env-dof-distance" min="0.5" max="100" step="0.5" value="8" />
+          <span class="val" id="env-dof-distance-v"></span></div>
+        <div class="prop-row" title="How strongly what is out of focus blurs">
+          <label>Blur</label>
+          <input type="range" id="env-dof-blur" min="0" max="1" step="0.05" value="0.4" />
+          <span class="val" id="env-dof-blur-v"></span></div>
+        <h4 class="insp-h">Colour</h4>
+        <div class="prop-row" title="Darks darker and lights lighter (or flatter, below 0)">
+          <label>Contrast</label>
+          <input type="range" id="env-contrast" min="-1" max="1" step="0.05" value="0" />
+          <span class="val" id="env-contrast-v"></span></div>
+        <div class="prop-row" title="Colours stronger, or towards grey (-1: black and white)">
+          <label>Saturation</label>
+          <input type="range" id="env-saturation" min="-1" max="1" step="0.05" value="0" />
+          <span class="val" id="env-saturation-v"></span></div>
+        <div class="prop-row" title="Towards amber (warm), or towards blue (cold)">
+          <label>Warmth</label>
+          <input type="range" id="env-warmth" min="-1" max="1" step="0.05" value="0" />
+          <span class="val" id="env-warmth-v"></span></div>
+        <div class="prop-row" title="The corners of the picture darker, as through a lens">
+          <label>Vignette</label>
+          <input type="range" id="env-vignette" min="0" max="1" step="0.05" value="0" />
+          <span class="val" id="env-vignette-v"></span></div>
+        <div class="prop-row" title="A fine moving grain, as on film: a horror game, a flashback">
+          <label>Film grain</label>
+          <input type="range" id="env-grain" min="0" max="1" step="0.05" value="0" />
+          <span class="val" id="env-grain-v"></span></div>
+        <h4 class="insp-h">Speed</h4>
+        <label class="check-row" title="While playing, copies that look alike (the same shape and material, any colour) are drawn in one go: hundreds of coins, trees or crates cost about as much as one">
+          <input type="checkbox" id="env-instancing" checked /> Draw copies together</label>
+        <div class="prop-row" title="Nothing farther than this is drawn while playing (it fades into fog, if there is fog). 0: no limit. An object's own Level of detail component comes first">
+          <label>Draw distance</label>
+          <input type="range" id="env-draw-distance" min="0" max="1000" step="10" value="0" />
+          <span class="val" id="env-draw-distance-v">no limit</span></div>
+        </details>
+        <h4 class="insp-h">Extra lights</h4>
+        <div class="add-row">
+          <button class="tbtn" data-light="directional">☀ Dir</button>
+          <button class="tbtn" data-light="point">💡 Point</button>
+          <button class="tbtn" data-light="spot">🔦 Spot</button>
+          <button class="tbtn" data-light="ambient">◌ Amb</button>
+          <button class="tbtn" data-light="probe" title="A light probe: a box round a room — what is inside is lit and reflected by the room, not the sky">◎ Probe</button>
+        </div>
+        <div id="light-list"></div>
+      </div>
+      <div class="resize-handle"></div>
+    </div>
+
+    <div id="asset-browser" class="panel" data-collapsed="true">
+      <h3>Asset Browser</h3>
+      <div class="body">
+        <div class="scr-tabs">
+          <button class="tbtn active" data-asset-tab="library">Library</button>
+          <button class="tbtn" data-asset-tab="prefabs">Prefabs</button>
+        </div>
+        <div data-asset-page="library">
+          <div class="lib-top">
+            <button class="tbtn" id="btn-library-import" title="Import models: .glb, .gltf (with its files), .obj (with its .mtl and textures), .fbx, .stl">＋ Import…</button>
+            <input type="search" id="library-search" placeholder="Search" spellcheck="false" />
+          </div>
+          <div id="library-kinds" class="lib-kinds"></div>
+          <div id="library-list" class="lib-grid"></div>
+          <div class="lib-settings" title="How models are imported in this browser: their textures made smaller, so games load faster">
+            <div class="prop-row"><label>Textures at most</label>
+              <select id="import-max-texture"><option value="1024">1024 px</option><option value="2048">2048 px</option><option value="4096">4096 px</option><option value="0">as they are</option></select></div>
+            <label class="check-row"><input type="checkbox" id="import-jpeg" checked /> JPEG when there is nothing see-through (not normal maps)</label>
+          </div>
+        </div>
+        <div data-asset-page="prefabs" hidden>
+        <div class="insp-row" style="margin-bottom:8px">
+          <button class="tbtn" id="btn-save-prefab" title="Save selected object as a reusable prefab">💾 Prefab</button>
+        </div>
+        <ul id="asset-list"><li class="empty">No prefabs yet.</li></ul>
+        </div>
+        <div class="asset-storage" title="Models, imported textures and sound files are kept in this browser">
+          <span id="asset-storage-text">Stored in this browser: …</span>
+          <button class="tbtn" id="btn-clean-assets" disabled>Remove unused</button>
+        </div>
+      </div>
+      <div class="resize-handle"></div>
     </div>
   </div>
+
+  <!-- ===== right dock: what the selected object does, and the game itself ===== -->
+  <div id="dock-right" class="dock">
+    <div id="inspector" class="panel">
+      <h3>Inspector</h3>
+      <div id="inspector-body"><div class="empty">Select an object in the scene or hierarchy.</div></div>
+      <div class="resize-handle"></div>
+    </div>
+
+    <div id="audio-panel" class="panel" data-collapsed="true">
+      <h3>Audio</h3>
+      <div class="body">
+        <h4 class="insp-h" style="margin-top:0">Mixer</h4>
+        <div class="prop-row"><label>Master</label>
+          <input type="range" id="aud-volume" min="0" max="1" step="0.01" value="1" />
+          <span class="val" id="aud-volume-v">100%</span></div>
+        <div class="prop-row"><label>Music</label>
+          <input type="range" id="aud-music" min="0" max="1" step="0.01" value="1" />
+          <span class="val" id="aud-music-v">100%</span></div>
+        <div class="prop-row"><label>Effects</label>
+          <input type="range" id="aud-effects" min="0" max="1" step="0.01" value="1" />
+          <span class="val" id="aud-effects-v">100%</span></div>
+        <div class="prop-row"><label>Ambience</label>
+          <input type="range" id="aud-ambience" min="0" max="1" step="0.01" value="1" />
+          <span class="val" id="aud-ambience-v">100%</span></div>
+        <div class="prop-row" title="The room the game sounds like. Heard on effects and ambience — music keeps the space it was made with.">
+          <label>Space</label>
+          <select id="aud-space"></select></div>
+        <div class="prop-row" title="How much of the echo is heard"><label>Echo</label>
+          <input type="range" id="aud-space-amount" min="0" max="1" step="0.01" value="0.4" />
+          <span class="val" id="aud-space-amount-v">40%</span></div>
+        <label class="check-row"><input type="checkbox" id="aud-mute" /> Mute while editing</label>
+        <div class="insp-row" style="margin-top:4px">
+          <button class="tbtn" id="aud-test">Test tone</button>
+          <button class="tbtn" id="aud-stop-test" disabled>Stop test</button>
+        </div>
+        <h4 class="insp-h">Scene music &amp; ambience</h4>
+        <div id="scene-audio"></div>
+        <div id="audio-body" style="margin-top:4px"></div>
+        <datalist id="t3-sound-names"></datalist>
+      </div>
+      <div class="resize-handle"></div>
+    </div>
 
   <!-- camera settings: tie the camera to any object -->
-  <div id="camera-panel" class="panel">
+  <div id="camera-panel" class="panel" data-collapsed="true">
     <h3>Camera</h3>
     <div class="resize-handle"></div>
     <div class="body">
-      <div class="prop-row"><label>Target</label><select id="cam-target"></select></div>
-      <div class="prop-row"><label>FOV</label>
-        <input type="range" id="cam-fov" min="30" max="110" step="1" value="60" />
-        <span class="val" id="cam-fov-v">60</span></div>
-      <h4 class="insp-h">Follow / Orbit</h4>
-      <div class="prop-row"><label>Offset</label>
-        <input type="range" id="cam-offset" min="2" max="20" step="0.5" value="6" />
-        <span class="val" id="cam-offset-v">6</span></div>
-      <div class="prop-row"><label>Height</label>
-        <input type="range" id="cam-height" min="0" max="12" step="0.5" value="3" />
-        <span class="val" id="cam-height-v">3</span></div>
-      <div class="prop-row"><label>Look up</label>
-        <input type="range" id="cam-lookup" min="-2" max="6" step="0.25" value="1" />
-        <span class="val" id="cam-lookup-v">1</span></div>
-      <div class="prop-row"><label>Look ahead</label>
-        <input type="range" id="cam-ahead" min="0" max="10" step="0.25" value="0" />
-        <span class="val" id="cam-ahead-v">0</span></div>
-      <div class="prop-row"><label>Smooth</label>
-        <input type="range" id="cam-lerp" min="0.01" max="1" step="0.01" value="0.12" />
-        <span class="val" id="cam-lerp-v">0.12</span></div>
-      <div class="prop-row"><label>Damping</label>
-        <input type="range" id="cam-damp" min="0" max="2" step="0.05" value="1" />
-        <span class="val" id="cam-damp-v">1</span></div>
-      <div class="prop-row"><label>Orbit H</label>
-        <input type="range" id="cam-orbit-h" min="-5" max="10" step="0.5" value="0" />
-        <span class="val" id="cam-orbit-h-v">0</span></div>
-      <label class="check-row"><input type="checkbox" id="cam-rotate" checked /> Rotate with target</label>
-      <label class="check-row"><input type="checkbox" id="cam-lock-y" /> Lock follow Y (top-down)</label>
-      <label class="check-row"><input type="checkbox" id="cam-orbit-lock" checked /> Orbit locks to target</label>
-      <h4 class="insp-h">Gizmo</h4>
-      <div class="prop-row"><label>Sensitivity</label>
-        <input type="range" id="gizmo-sens" min="0.05" max="1" step="0.05" value="0.25" />
-        <span class="val" id="gizmo-sens-v">0.25</span></div>
-      <h4 class="insp-h">Snapping</h4>
-      <div class="prop-row"><label>Grid</label>
-        <input type="range" id="snap-trans" min="0" max="2" step="0.25" value="0" />
-        <span class="val" id="snap-trans-v">off</span></div>
-      <div class="prop-row"><label>Angle</label>
-        <input type="range" id="snap-rot" min="0" max="90" step="15" value="0" />
-        <span class="val" id="snap-rot-v">off</span></div>
-      <div class="prop-row"><label>Scale</label>
-        <input type="range" id="snap-scl" min="0" max="1" step="0.25" value="0" />
-        <span class="val" id="snap-scl-v">off</span></div>
-    </div>
-  </div>
-
-  <!-- inspector -->
-  <div id="inspector" class="panel">
-    <h3>Inspector</h3>
-    <div class="resize-handle"></div>
-    <div id="inspector-body"><div class="empty">Select an object in the scene or hierarchy.</div></div>
-  </div>
-
-  <!-- player control settings -->
-  <div id="controls-panel" class="panel">
-    <h3>Player Controls</h3>
-    <div class="resize-handle"></div>
-    <div class="body">
-      <div class="prop-row"><label>Target</label><select id="ctl-target"></select></div>
-      <label class="check-row"><input type="checkbox" id="ctl-enabled" checked /> Controls enabled</label>
-      <div class="prop-row"><label>Speed</label>
-        <input type="range" id="ctl-speed" min="1" max="20" step="0.5" value="8" />
-        <span class="val" id="ctl-speed-v">8</span></div>
-      <div class="prop-row"><label>Jump</label>
-        <input type="range" id="ctl-jump" min="2" max="18" step="0.5" value="9" />
-        <span class="val" id="ctl-jump-v">9</span></div>
-      <label class="check-row"><input type="checkbox" id="aud-mute" /> Mute all audio</label>
-      <div class="insp-row" style="margin-top:4px">
-        <button class="tbtn" id="aud-test">Test tone</button>
-        <button class="tbtn" id="aud-stop-test" disabled>Stop test</button>
+      <div class="prop-row" title="The camera the game uses in Play and in exported games — edit in any view you like">
+        <label>When playing</label>
+        <select id="cam-play-mode">
+          <option value="">Same as the editor view</option>
+          <option value="orbit">Orbit</option>
+          <option value="follow">Follow</option>
+          <option value="fps">First person</option>
+        </select>
       </div>
-      <h4 class="insp-h">Key bindings <span style="color:var(--dim);text-transform:none">(click, then press a key)</span></h4>
-      <div id="bind-list"></div>
-      <p class="empty" style="font-size:11px;margin-top:8px">
-        <b>Fire</b> plays the sound attached to the Player during Play mode.
-      </p>
+      <div class="prop-row" title="What follow, orbit and first person are tied to — the player if none">
+        <label>Target</label><select id="cam-target"></select></div>
+      <!-- each camera's own settings, drawn by camera-panel.js -->
+      <div class="cam-tabs" id="cam-tabs"></div>
+      <div id="cam-settings"></div>
     </div>
+  </div>
+
+    <div id="controls-panel" class="panel" data-collapsed="true">
+      <h3>Controls</h3>
+      <div class="body">
+        <div class="prop-row" title="The object that “player” means in controls, rules and components">
+          <label>Player is</label><select id="ctl-target"></select></div>
+        <div class="gp-legend">Each control: an <b>input</b> — a key, a mouse button or an
+          on-screen button — and what it <b>does</b> to <b>who</b>.</div>
+        <div id="control-list"></div>
+        <div class="insp-row">
+          <button class="tbtn" id="ctl-add-control">+ Add control</button>
+        </div>
+      </div>
+      <div class="resize-handle"></div>
+    </div>
+
+    <div id="game-panel" class="panel" data-collapsed="true">
+      <h3>Game</h3>
+      <div class="body">
+        <h4 class="insp-h" style="margin-top:0">Name and icon</h4>
+        <div class="game-ui">
+          <div class="prop-row"><label title="The browser tab's title, the loading screen, and the exported files' names">Name</label>
+            <input type="text" id="ui-game-name" spellcheck="false" maxlength="80" placeholder="My Game" /></div>
+          <div class="prop-row"><label title="The icon on the browser tab: an emoji, or an image of your own">Icon</label>
+            <input type="text" id="ui-game-icon" maxlength="8" style="width:48px;text-align:center" title="An emoji" />
+            <button class="tbtn" id="ui-game-icon-image" title="Use an image (a square PNG works best)">Image…</button>
+            <button class="gp-x" id="ui-game-icon-clear" title="Back to the emoji" hidden>×</button></div>
+        </div>
+        <h4 class="insp-h">Variables <span style="color:var(--dim);text-transform:none">(score, lives, …)</span></h4>
+        <div id="var-list"></div>
+        <div class="insp-row">
+          <button class="tbtn" id="var-add">+ Variable</button>
+        </div>
+        <div class="gp-legend" style="margin-top:6px">The menu is how each one shows on screen while
+          playing — a number, a bar, hearts, or hidden. ⚙ gives one its own label, place, colour and size.</div>
+        <h4 class="insp-h">Variables on screen</h4>
+        <!-- where the HUD sits and how it looks, drawn by game.js from game-ui.js -->
+        <div class="game-ui" id="ui-hud-look"></div>
+        <h4 class="insp-h">Title screen</h4>
+        <div class="game-ui">
+          <label class="check-row"><input type="checkbox" id="ui-title-on" /> Show a title screen when the game starts</label>
+          <div class="prop-row"><label>Title</label><input type="text" id="ui-title-text" spellcheck="false" /></div>
+          <div class="prop-row"><label>Subtitle</label><input type="text" id="ui-title-sub" spellcheck="false" /></div>
+          <div class="prop-row"><label>Prompt</label><input type="text" id="ui-title-prompt" spellcheck="false" /></div>
+          <label class="check-row" title="Off by default, so testing with Play stays quick"><input type="checkbox" id="ui-title-editor" /> Also when I press Play here</label>
+          <div class="insp-row"><button class="tbtn" id="ui-title-preview">Preview title screen</button></div>
+        </div>
+        <h4 class="insp-h">Crosshair</h4>
+        <!-- the aiming mark at the middle of the screen, drawn by game.js from game-ui.js -->
+        <div class="game-ui" id="ui-crosshair"></div>
+        <h4 class="insp-h">Touch screens</h4>
+        <div class="prop-row"><label title="How a phone or tablet moves the player: a thumb joystick (any direction, part way to walk slowly) or four ▲ ▼ ◀ ▶ buttons">Move with</label>
+          <select id="ui-touch-move"><option value="joystick">Joystick</option><option value="dpad">D-pad buttons</option></select></div>
+        <h4 class="insp-h">Languages</h4>
+        <div class="game-ui">
+          <div class="pass-list" id="lang-list"></div>
+          <div class="prop-row"><label id="lang-add-label" title="The language the game is written in, then the others it can be played in">Written in</label>
+            <select id="lang-add"></select></div>
+          <div class="insp-row"><button class="tbtn" id="lang-translate" title="Every text a player sees, and its translation in each language">Translate texts…</button></div>
+          <div class="gp-legend" id="lang-missing"></div>
+          <div class="prop-row"><label title="Which language Play shows here, to try a translation">Play in</label>
+            <select id="lang-preview"></select></div>
+          <div class="gp-legend">A player gets the language their browser asks for (or the game's own), and can change it in the pause menu.</div>
+        </div>
+      </div>
+      <div class="resize-handle"></div>
+    </div>
+
+    <!-- the game's own screens (menus, an inventory) and dialogues: src/app/screens-panel.js -->
+    <div id="screens-panel" class="panel" data-collapsed="true">
+      <h3>Screens &amp; dialogue</h3>
+      <div class="body" id="screens-body"></div>
+      <div class="resize-handle"></div>
+    </div>
+  </div>
+
+  <!-- Languages: every text a player sees, translated -->
+  <div id="lang-dialog" class="modal" hidden>
+    <div class="modal-box lang-box" role="dialog" aria-labelledby="lang-title">
+      <h2 id="lang-title">Translate texts</h2>
+      <p class="modal-sub">Each text a player sees, as written, and in the game's other languages. One left empty is shown as written.</p>
+      <div class="lang-scroll"><table id="lang-table"></table></div>
+      <div class="modal-actions"><button class="tbtn" id="lang-close">Done</button></div>
+    </div>
+  </div>
+
+  <!-- New game: start empty or from a template -->
+  <div id="new-dialog" class="modal" hidden>
+    <div class="modal-box" role="dialog" aria-labelledby="new-title">
+      <h2 id="new-title">Start a new game</h2>
+      <p class="modal-sub">Pick a finished game to play and change, or start empty. This replaces the game
+        that is open — save it first if you want to keep it.</p>
+      <div class="tpl-grid" id="tpl-grid"></div>
+      <div class="modal-actions"><button class="tbtn" id="new-cancel">Cancel</button></div>
+    </div>
+  </div>
+
+
+  <!-- Export: one file, or a website -->
+  <div id="export-dialog" class="modal" hidden>
+    <div class="modal-box" role="dialog" aria-labelledby="export-title">
+      <h2 id="export-title">Export the game</h2>
+      <p class="modal-sub">Every level, model, texture and sound goes with it. Players need no editor.</p>
+      <div class="tpl-grid">
+        <button class="tpl-card" data-export="file">
+          <span class="tpl-emoji">📄</span><span class="tpl-name">One file (.html)</span>
+          <span class="tpl-blurb">Everything inside one page. Runs anywhere — even double-clicked from Downloads. Easy to send.</span>
+        </button>
+        <button class="tpl-card" data-export="zip">
+          <span class="tpl-emoji">🌐</span><span class="tpl-name">Website (.zip)</span>
+          <span class="tpl-blurb">For GitHub Pages, itch.io or any web host: unzip it there. Smaller, cached, loads faster.</span>
+        </button>
+        <button class="tpl-card" data-export="folder">
+          <span class="tpl-emoji">📁</span><span class="tpl-name">Website into a folder…</span>
+          <span class="tpl-blurb">Writes the website straight into a folder you pick — your GitHub Pages repository, say.</span>
+          <span class="tpl-keys" id="export-folder-note">Chrome and Edge</span>
+        </button>
+      </div>
+      <div class="modal-actions"><button class="tbtn" id="export-cancel">Cancel</button></div>
+    </div>
+  </div>
+
+  <!-- win / lose banner -->
+  <div id="outcome">
+    <div class="msg" id="outcome-msg"></div>
+    <div class="sub">Press Esc to return to the editor</div>
+    <button id="outcome-again">Play again</button>
   </div>
 
   <!-- status bar -->
+  <div id="notices" role="status" aria-live="polite"></div>
+  <div id="drop-zone" hidden>Drop to add the model here
+    <small>.glb — or a .gltf with its .bin and textures, or the whole folder</small></div>
   <div id="status" class="panel">
-    <b>Tiny3 Editor</b> — <span id="status-text">orbit cam · move gizmo</span><br />
-    <span class="k">click</span> select · drag gizmo handles ·
+    <b>Tiny3 Editor</b> <span id="build-version" style="color:var(--dim);font-size:11px"></span>
+    — <span id="status-text">orbit cam · move gizmo</span><br />
+    <span class="k">click</span> select · <span class="k">drag</span> orbit ·
+    <span class="k">right-drag</span> pan · <span class="k">scroll</span> or
+    <span class="k">double-click</span> zoom ·
     <span class="k">G</span>/<span class="k">R</span>/<span class="k">S</span> gizmo mode ·
     <span class="k">Del</span> delete · <span class="k">Esc</span> deselect ·
-    <span class="k">▶</span> play · scene autosaves · <span class="k">Shift+click</span> multi-select
+    <span class="k">▶</span> play · <span class="k">Shift+click</span> multi-select
   </div>
 
-  <script type="module" src="./src/game.js?v=4"></script>
+  <!-- No ?v= cache-buster: it only ever versioned this one file, while the 20+
+       modules it imports were still served from cache, which made edits look
+       like they had not applied. Hard-reload (Ctrl+Shift+R) if you see stale code. -->
+  <script type="module" src="./src/game.js"></script>
 </body>
 </html>

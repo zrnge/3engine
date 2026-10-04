@@ -18,35 +18,43 @@ export class Entity {
   start(_engine) {}
   update(_dt, _engine) {}
 
-  /** Reparent this entity under `newParent` (Entity or null for scene root). */
+  /**
+   * Reparent this entity under `newParent` (Entity or null for scene root),
+   * preserving its world transform.
+   *
+   * Parenting only moves the object within the Three.js scene graph — the entity
+   * stays registered with the engine, so it keeps updating, keeps its rigid body
+   * and keeps its behavior script. (It used to be dropped from the engine here,
+   * which silently killed every child object.)
+   */
   setParent(newParent, engine) {
-    if (this.parent === newParent) return;
-    // detach from old parent
+    if (this.parent === newParent || newParent === this) return;
+    const o = this.object3D;
+
+    o.updateMatrixWorld(true);
+    const world = o.matrixWorld.clone();
+
+    // detach from whoever currently holds it
     if (this.parent) {
       const idx = this.parent.children.indexOf(this);
       if (idx !== -1) this.parent.children.splice(idx, 1);
-      // preserve world transform before reparenting
-      this.object3D.applyMatrix4(this.parent.object3D.matrixWorld);
-      this.object3D.updateMatrix();
-      this.parent.object3D.remove(this.object3D);
-    } else if (engine) {
-      engine.scene.remove(this.object3D);
-      this.object3D.updateMatrixWorld();
     }
-    // remove from engine root list if it was there
-    if (engine) engine.remove(this);
+    o.parent?.remove(o);
 
     this.parent = newParent;
     if (newParent) {
       newParent.children.push(this);
-      newParent.object3D.add(this.object3D);
-      // convert world matrix back to local under new parent
-      const parentInv = new THREE.Matrix4().copy(newParent.object3D.matrixWorld).invert();
-      this.object3D.applyMatrix4(parentInv);
-      this.object3D.updateMatrix();
+      newParent.object3D.updateMatrixWorld(true);
+      newParent.object3D.add(o);
+      // world -> local under the new parent
+      const local = new THREE.Matrix4()
+        .copy(newParent.object3D.matrixWorld)
+        .invert()
+        .multiply(world);
+      decomposeInto(o, local);
     } else if (engine) {
-      engine.scene.add(this.object3D);
-      engine.add(this);
+      engine.scene.add(o);
+      decomposeInto(o, world);
     }
   }
 
@@ -59,16 +67,24 @@ export class Entity {
     }
     this._clearSolidHelper();
     if (this.parent) this.setParent(null, engine);
-    else engine.remove(this);
+    if (engine) engine.remove(this);
   }
 
   _clearSolidHelper() {
     const helper = this.object3D.userData.__solidHelper;
     if (helper) {
       helper.parent?.remove(helper);
+      helper.geometry?.dispose();
+      helper.material?.dispose();
       delete this.object3D.userData.__solidHelper;
     }
   }
+}
+
+/** Write a matrix into an object's position/quaternion/scale. */
+function decomposeInto(object3D, matrix) {
+  matrix.decompose(object3D.position, object3D.quaternion, object3D.scale);
+  object3D.updateMatrix();
 }
 
 /** Axis-aligned bounding-box collision test on two Object3Ds with given half-sizes. */

@@ -1,16 +1,36 @@
 import * as THREE from 'three';
-import { Engine } from './engine.js';
+import { Engine, TINY3_VERSION } from './engine.js';
 import { CameraRig } from './cameras.js';
 import { AssetLoader } from './loader.js';
-import { ObjectEditor, LightEntity } from './editor.js';
-import { makeDraggable, makeResizable } from './ui.js?v=4';
+import { isTyping } from './input.js';
+import { ObjectEditor } from './editor.js';
+import { makeDraggable, makeResizable, makeDockPanel, showNotice } from './ui.js';
 import { History } from './history.js';
 import { SceneSerializer } from './scene.js';
-import { Entity } from './entity.js';
 import { Player } from './player.js';
-import { Coin } from './enemy.js';
-import { RigidBody } from './physics.js';
 import { GameExporter } from './export.js';
+import { wireEnvironmentPanel } from './environment-panel.js';
+import { wireControlsPanel } from './controls-panel.js';
+import { countScripts } from './script-trust.js';
+import { wireCameraPanel } from './camera-panel.js';
+import { Project } from './project.js';
+import { legacyPrefab } from './prefabs.js';
+import { assetStore, savedGames } from './assets-db.js';
+import { wireLevelsPanel } from './levels-panel.js';
+import { normalizeUI } from './game-ui.js';
+import { i18n, t, collectTexts } from './i18n.js';
+import { wireLanguagesPanel } from './languages-panel.js';
+import { wireObjects } from './app/objects.js';
+import { wireAssetBrowser } from './app/asset-browser.js';
+import { wireAssetLibrary } from './app/asset-library.js';
+import { wireNewGame } from './app/new-game.js';
+import { wireAudioMixer } from './app/audio-mixer.js';
+import { wireGamePanel } from './app/game-panel.js';
+import { wireScreensPanel } from './app/screens-panel.js';
+import { installTerrainBrush } from './editor/terrain-brush.js';
+import { wireFiles } from './app/files.js';
+import { wirePlayMode } from './app/play-mode.js';
+import { wireToolsDrawer } from './app/tools-drawer.js';
 
 // ---- engine ----
 const engine = new Engine({ background: 0x0b0e14 });
@@ -23,13 +43,22 @@ const rig = new CameraRig(engine.camera, engine.renderer.domElement);
 rig.enabled = true;
 engine.cameraRig = rig;
 
+// ---- asset loading (shared by the editor, serializer and toolbar) ----
+// the renderer lets KTX2-compressed textures pick a format this GPU can show
+const assets = new AssetLoader({ renderer: engine.renderer });
+
 // ---- editor: gizmo + hierarchy + inspector ----
 const history = new History({ limit: 100 });
 const editor = new ObjectEditor(engine, {
   listEl: document.getElementById('scene-list'),
   inspectorEl: document.getElementById('inspector-body'),
+  shapeEl: document.getElementById('shape-body'),
+  materialEl: document.getElementById('material-body'),
+  audioEl: document.getElementById('audio-body'),
+  lightListEl: document.getElementById('light-list'),
   statusEl: document.getElementById('status-text'),
   history,
+  assets,
   onModeChange: (mode) => {
     document.querySelectorAll('.gizmo-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.mode === mode));
@@ -37,180 +66,171 @@ const editor = new ObjectEditor(engine, {
 });
 
 // ---- player controller (invisible by default; user selects a target) ----
-const player = engine.add(new Player());
-player.object3D.userData.kind = 'Player';
-player.object3D.visible = false;
+const player = engine.add(new Player()); // hidden: it only stands in (player.js)
+engine.player = player; // "player" in controls, rules and components means player.target
 // do not register the player or default lights in the hierarchy — user adds their own objects
-
-function controlledEntity(p) {
-  return p.target || p;
-}
-
-player.onFire = (p, eng) => {
-  if (muteCheck.checked) return;
-  eng.playEntitySounds(controlledEntity(p), { trigger: 'fire' });
-};
-
-player.onJump = (p, eng) => {
-  if (muteCheck.checked) return;
-  eng.playEntitySounds(controlledEntity(p), { trigger: 'jump' });
-};
+// what the player can do is the scene's controls — see the Controls panel below
 rig.setMode('orbit');
 
-// ---- starter objects ----
-const assets = new AssetLoader();
-
-class Prop extends Entity {
-  constructor(object3D) {
-    super(object3D);
-    this.halfSize = new THREE.Vector3(0.5, 0.5, 0.5);
-    object3D.userData.kind = 'Prop';
-  }
-}
-
-function addProp(object3D, name) {
-  object3D.name = name;
-  return editor.register(engine.add(new Prop(object3D)));
-}
-
-const PRIMITIVES = {
-  box: () => new THREE.BoxGeometry(1.5, 1.5, 1.5),
-  sphere: () => new THREE.SphereGeometry(0.9, 32, 16),
-  cone: () => new THREE.ConeGeometry(0.9, 2, 24),
-  cylinder: () => new THREE.CylinderGeometry(0.7, 0.7, 1.8, 24),
-  torus: () => new THREE.TorusGeometry(0.9, 0.35, 16, 40),
-};
-const PALETTE = [0x539bf5, 0xf6a435, 0x4dd0a6, 0xf47067, 0xdaaa3f, 0xb083f0];
-
-function addPrimitive(kind) {
-  const geo = PRIMITIVES[kind] ? PRIMITIVES[kind]() : PRIMITIVES.box();
-  const color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color }));
-  // place in front of the camera so it's immediately visible
-  const dir = engine.camera.getWorldDirection(new THREE.Vector3());
-  mesh.position.copy(engine.camera.position).addScaledVector(dir, 8);
-  mesh.position.y = Math.max(mesh.position.y, 1);
-  const entity = addProp(mesh, kind[0].toUpperCase() + kind.slice(1));
-  editor.recordAdd(entity); // undoable
-  return entity;
-}
-
-function addLight(kind) {
-  let light;
-  const pos = engine.camera.position.clone()
-    .addScaledVector(engine.camera.getWorldDirection(new THREE.Vector3()), 6);
-  switch (kind) {
-    case 'point':
-      light = new THREE.PointLight(0xffe0b3, 30, 25);
-      light.position.copy(pos);
-      break;
-    case 'spot': {
-      light = new THREE.SpotLight(0xffffff, 60, 30, Math.PI / 6, 0.4);
-      light.position.copy(pos);
-      light.target.position.set(0, 0, 0);
-      scene.add(light.target);
-      break;
-    }
-    case 'ambient':
-      light = new THREE.AmbientLight(0xffffff, 0.4);
-      break;
-    default: // directional
-      light = new THREE.DirectionalLight(0xffffff, 1);
-      light.position.copy(pos);
-  }
-  scene.add(light);
-  const entity = new LightEntity(light, { point: 'Point Light', spot: 'Spot Light', ambient: 'Ambient Light' }[kind] || 'Directional Light');
-  editor.register(entity);
-  editor.recordAdd(entity); // undoable
-  editor.select(entity);
-  return entity;
-}
+/**
+ * What the editor's parts share (src/app/*.js): the engine, the editor, the history… and
+ * what each part offers the others, put here as it is wired (app.markDirty, app.enterPlay…).
+ */
+const app = { engine, scene, input, rig, assets, history, editor, player, viewport: engine.renderer.domElement };
+Object.assign(app, { setCamMode, setPanTool, focusViewport, refreshHistoryButtons, refreshCamTargets, refreshControlTargets });
 
 // no starter props, coins, or sample models — user builds the scene from scratch
 
 // debug handle
 window.__engine = engine;
+window.__tiny3Version = TINY3_VERSION;
+console.log(
+  `%c Tiny3 ${TINY3_VERSION} `,
+  'background:#4dd0a6;color:#0b0e14;font-weight:700;border-radius:3px',
+  '— if this version looks old, hard-reload with Ctrl+Shift+R'
+);
+
+// ---- keyboard focus belongs to the game, not to the last button clicked ----
+// A clicked <button> keeps focus, and the browser activates a focused button on
+// Space/Enter. Space is the default jump key, so pressing it during Play used to
+// re-trigger the Play button and stop the game. Drop focus after every click and
+// hand it back to the canvas.
+const viewport = engine.renderer.domElement;
+viewport.tabIndex = -1;
+viewport.style.outline = 'none';
+
+function focusViewport() {
+  try { viewport.focus({ preventScroll: true }); } catch (_) { viewport.focus(); }
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target instanceof Element ? e.target.closest('button') : null;
+  if (btn) {
+    btn.blur();
+    // don't steal focus from a field the user is filling in
+    if (!document.activeElement || document.activeElement === document.body) focusViewport();
+  }
+});
 
 // browsers block audio until a user gesture — unlock the AudioContext once
 const _unlock = () => { engine.unlockAudio(); };
 window.addEventListener('pointerdown', _unlock, { once: false });
 window.addEventListener('keydown', _unlock, { once: false });
 
+{
+  const el = document.getElementById('build-version');
+  if (el) el.textContent = `v${TINY3_VERSION}`;
+}
+
+// ---- keep the panels clear of the toolbar, however many rows it wraps to ----
+{
+  const toolbar = document.getElementById('toolbar');
+  const syncToolbarHeight = () => {
+    const h = Math.round(toolbar.getBoundingClientRect().height);
+    document.documentElement.style.setProperty('--toolbar-h', `${h}px`);
+  };
+  // the left dock ends above the status bar, whatever height that wraps to
+  const status = document.getElementById('status');
+  const syncStatusHeight = () => {
+    const h = Math.round(status.getBoundingClientRect().height);
+    document.documentElement.style.setProperty('--status-h', `${h + 18}px`);
+  };
+  syncToolbarHeight();
+  syncStatusHeight();
+  // the toolbar wraps to two or three rows on a narrow window; panels follow it
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(syncToolbarHeight).observe(toolbar);
+    new ResizeObserver(syncStatusHeight).observe(status);
+  }
+  window.addEventListener('resize', () => { syncToolbarHeight(); syncStatusHeight(); });
+}
+
 // ---- draggable + resizable panels ----
 document.querySelectorAll('.panel').forEach((p) => {
   makeDraggable(p);
-  makeResizable(p, { minWidth: 180, minHeight: 140 });
+  makeResizable(p, { minWidth: 180, minHeight: 80 });
 });
+// one panel per job, docked in two columns; each collapses from its header
+document.querySelectorAll('.dock > .panel').forEach((p) => makeDockPanel(p));
+editor._renderInspector(); // fill every panel's empty state and the light list
 
-// ---- asset browser: prefabs and reusable assets ----
-const assetList = document.getElementById('asset-list');
-const btnSavePrefab = document.getElementById('btn-save-prefab');
+// ---- natural lighting: sun, sky, shadows and fog, in the Lighting panel ----
+const envPanel = app.envPanel = wireEnvironmentPanel(engine.environment, { history, onChange: () => app.markDirty() });
 
-function renderAssetBrowser() {
-  if (!assetList) return;
-  const names = editor.listPrefabs();
-  assetList.innerHTML = '';
-  if (!names.length) {
-    assetList.innerHTML = '<li class="empty">No prefabs yet.</li>';
-    return;
-  }
-  for (const name of names) {
-    const li = document.createElement('li');
-    li.innerHTML = `<span class="ico">◆</span><span class="nm">${name}</span><span class="del" title="Delete prefab">×</span>`;
-    li.querySelector('.nm').addEventListener('click', () => {
-      const created = editor.instantiatePrefab(name);
-      if (created) markDirty();
-    });
-    li.querySelector('.del').addEventListener('click', (e) => {
-      e.stopPropagation();
-      editor.deletePrefab(name);
-      renderAssetBrowser();
-    });
-    assetList.appendChild(li);
+// A dock takes the pointer only while its panels overflow it — then its
+// scrollbar has to be draggable. Otherwise its empty space passes clicks
+// through to the 3D view.
+for (const dock of document.querySelectorAll('.dock')) {
+  const sync = () => dock.classList.toggle('overflowing', dock.scrollHeight > dock.clientHeight + 1);
+  sync();
+  if (typeof ResizeObserver !== 'undefined') {
+    const watch = new ResizeObserver(sync);
+    watch.observe(dock);
+    for (const panel of dock.children) watch.observe(panel); // collapse, re-render
   }
 }
 
-if (btnSavePrefab) {
-  btnSavePrefab.addEventListener('click', () => {
-    const sel = editor.selected;
-    if (!sel) { alert('Select an object first.'); return; }
-    const name = prompt('Prefab name:', sel.object3D.name || 'Prefab');
-    if (!name) return;
-    if (editor.saveAsPrefab(name)) {
-      renderAssetBrowser();
-      markDirty();
-    }
-  });
-}
-
-renderAssetBrowser();
+wireAssetBrowser(app); // src/app/asset-browser.js
 
 // ---- toolbar wiring ----
+let cameraPanel = null; // the Camera panel's per-camera settings (wired further down)
+
 function setCamMode(mode) {
-  if (mode === 'orbit') { rig.setMode('orbit', { target: rig.target }); input.exitPointerLock(); }
-  if (mode === 'follow') { rig.setMode('follow', { target: rig.target }); input.exitPointerLock(); }
-  if (mode === 'free') { rig.setMode('free'); input.requestPointerLock(); }
+  // follow and first person use the camera target, or the player's
+  rig.fallbackTarget = engine.playerEntity?.object3D ?? null;
+  rig.setMode(mode, { target: rig.target });
+  // Choosing a view never captures the mouse: while editing it stays free for
+  // the panels and toolbar (first person and fly look round by dragging). Only
+  // Play captures it, for cameras that look with the mouse.
+  // (body.playing: Play adds it to the page)
+  if (!document.body.classList.contains('playing') || !rig.wantsPointerLock()) input.exitPointerLock();
   document.querySelectorAll('.cam-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.mode === mode));
+  cameraPanel?.showTab(mode); // its settings, ready to adjust
+}
+
+// ---- hand tool: left-drag pans, and the gizmo stands down while it is on ----
+const panBtn = document.getElementById('btn-pan');
+
+function setPanTool(on) {
+  rig.setPanTool(on);
+  panBtn?.classList.toggle('active', on);
+  // the gizmo grabs the left button too — it has to yield while panning
+  editor.gizmo.enabled = !on;
+}
+
+panBtn?.addEventListener('click', () => setPanTool(!rig.panTool));
+
+// ---- double-click a model to glide the camera onto it and zoom in ----
+{
+  const ray = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const canvas = engine.renderer.domElement;
+  canvas.addEventListener('dblclick', (e) => {
+    if (rig.mode !== 'orbit') return;
+    const rect = canvas.getBoundingClientRect();
+    ndc.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    ray.setFromCamera(ndc, engine.camera);
+    const roots = editor.selectables
+      .filter((ent) => !ent.object3D.isLight && ent.object3D.visible)
+      .map((ent) => ent.object3D);
+    const hit = ray.intersectObjects(roots, true)[0];
+    if (hit) rig.focusOn(hit.point); // empty space: nothing to focus on
+  });
 }
 
 document.querySelectorAll('.gizmo-btn').forEach((b) =>
-  b.addEventListener('click', () => editor.setGizmoMode(b.dataset.mode)));
+  b.addEventListener('click', () => {
+    setPanTool(false); // picking a transform tool leaves the hand tool
+    editor.setGizmoMode(b.dataset.mode);
+  }));
 document.querySelectorAll('.cam-btn').forEach((b) =>
   b.addEventListener('click', () => setCamMode(b.dataset.mode)));
-document.querySelectorAll('[data-add]').forEach((b) =>
-  b.addEventListener('click', () => editor.select(addPrimitive(b.dataset.add))));
-document.querySelectorAll('[data-light]').forEach((b) =>
-  b.addEventListener('click', () => addLight(b.dataset.light)));
-document.getElementById('btn-load-glb').addEventListener('click', () => {
-  assets.pickAndLoad({ position: [0, 0, 0] }).then((obj) => {
-    if (obj) {
-      const entity = addProp(obj, obj.name);
-      editor.recordAdd(entity); // undoable
-      editor.select(entity);
-    }
-  });
-});
+wireObjects(app); // src/app/objects.js
+wireAssetLibrary(app); // src/app/asset-library.js: the library, and how models are imported
 
 // ---- Reset View button ----
 document.getElementById('btn-reset-view').addEventListener('click', () => {
@@ -229,23 +249,7 @@ document.getElementById('btn-reset-view').addEventListener('click', () => {
     b.classList.toggle('active', b.dataset.mode === 'orbit'));
 });
 
-// ---- New scene: clear everything and wipe autosave ----
-function newScene() {
-  if (!confirm('Start a new empty scene? This clears the current scene and autosave.')) return;
-  // remove all selectable entities
-  for (const e of [...editor.selectables]) {
-    editor.removeEntity(e, { record: false });
-  }
-  editor.select(null);
-  editor._renderHierarchy();
-  refreshCamTargets();
-  refreshControlTargets();
-  history.clear();
-  refreshHistoryButtons();
-  localStorage.removeItem(AUTOSAVE_KEY);
-  markDirty();
-}
-document.getElementById('btn-new').addEventListener('click', newScene);
+wireNewGame(app); // src/app/new-game.js
 
 // ---- camera panel: tie the camera to any object ----
 const camTargetSel = document.getElementById('cam-target');
@@ -276,69 +280,35 @@ function recordValue(target, prop, before, after, apply, label = 'camera') {
   });
 }
 
-function bindSlider(id, prop, target, apply, label = 'camera') {
-  const el = document.getElementById(id);
-  const val = document.getElementById(`${id}-v`);
-  let before = target[prop];
-  el.addEventListener('input', () => {
-    const v = parseFloat(el.value);
-    apply(v);
-    if (val) val.textContent = Number.isInteger(v) ? String(v) : v.toFixed(1);
-  });
-  el.addEventListener('change', () => {
-    const after = target[prop];
-    recordValue(target, prop, before, after, (v) => {
-      apply(v);
-      el.value = v;
-      if (val) val.textContent = Number.isInteger(v) ? String(v) : v.toFixed(1);
-    }, label);
-    before = after;
-  });
-}
+// Each camera's own settings (Orbit / Follow / First person / Fly), drawn from
+// CAMERA_SETTINGS. They used to be one list of follow-camera sliders — several
+// never saved, and "Smooth" set a per-second rate to fractions of one.
+cameraPanel = wireCameraPanel({
+  rig, history,
+  tabsEl: document.getElementById('cam-tabs'),
+  bodyEl: document.getElementById('cam-settings'),
+  onChange: () => app.markDirty(),
+  onPreview: (mode) => setCamMode(mode),
+});
+rig.physics = engine.physics; // the follow camera keeps out of walls
 
-// FOV slider: record before/after camera.fov (setFov doesn't store on rig)
-{
-  const fovEl = document.getElementById('cam-fov');
-  const fovVal = document.getElementById('cam-fov-v');
-  let fovBefore = rig.camera.fov;
-  fovEl.addEventListener('input', () => {
-    const v = parseFloat(fovEl.value);
-    rig.setFov(v);
-    fovVal.textContent = String(v);
-  });
-  fovEl.addEventListener('change', () => {
-    const after = rig.camera.fov;
-    recordValue(rig.camera, 'fov', fovBefore, after, (v) => {
-      rig.setFov(v);
-      fovEl.value = v;
-      fovVal.textContent = String(v);
-    }, 'camera FOV');
-    fovBefore = after;
-  });
-}
+// "When playing": the game's own camera, independent of the view you edit in
+const camPlayModeSel = document.getElementById('cam-play-mode');
+camPlayModeSel?.addEventListener('change', () => {
+  const before = rig.playMode;
+  const after = camPlayModeSel.value || null;
+  rig.playMode = after;
+  recordValue(rig, 'playMode', before, after, (v) => {
+    rig.playMode = v;
+    camPlayModeSel.value = v || '';
+    cameraPanel.render();
+  }, 'camera when playing');
+  if (after) cameraPanel.showTab(after); // its settings are the ones that matter now
+  else cameraPanel.render();
+  app.markDirty();
+});
 
-bindSlider('cam-offset', 'followOffset', rig, (v) => { rig.followOffset = v; }, 'camera offset');
-bindSlider('cam-height', 'followHeight', rig, (v) => { rig.followHeight = v; }, 'camera height');
-bindSlider('cam-lookup', 'followLookUp', rig, (v) => { rig.followLookUp = v; }, 'camera look up');
-bindSlider('cam-ahead', 'followLookAhead', rig, (v) => { rig.followLookAhead = v; }, 'camera look ahead');
-bindSlider('cam-lerp', 'followLerp', rig, (v) => { rig.followLerp = v; }, 'camera lerp');
-bindSlider('cam-damp', 'followDamping', rig, (v) => { rig.followDamping = v; }, 'camera damping');
-bindSlider('cam-orbit-h', 'orbitHeight', rig, (v) => { rig.orbitHeight = v; }, 'camera orbit height');
 
-function bindCheck(id, target, prop, label = 'camera') {
-  const el = document.getElementById(id);
-  let before = target[prop];
-  el.addEventListener('change', () => {
-    const after = el.checked;
-    recordValue(target, prop, before, after, (v) => { target[prop] = v; el.checked = v; }, label);
-    target[prop] = after;
-    before = after;
-  });
-}
-
-bindCheck('cam-rotate', rig, 'rotateWithTarget', 'camera rotate with target');
-bindCheck('cam-lock-y', rig, 'followLockY', 'camera lock Y');
-bindCheck('cam-orbit-lock', rig, 'orbitLockTarget', 'camera orbit lock target');
 
 // snapping controls
 function bindSnap(id, type) {
@@ -385,103 +355,45 @@ bindSnap('snap-scl', 'scale');
   });
 }
 
-// ---- player controls panel: rebindable keys + tuning ----
-const BIND_ACTIONS = ['forward', 'back', 'left', 'right', 'jump', 'fire'];
-const bindList = document.getElementById('bind-list');
+// ---- controls panel: which object is the player, and every control ----
+// Nothing is hardcoded: each control is an input (key / mouse / on-screen
+// button) and an action (move, jump, interact, shoot, change a variable…).
 const ctlTargetSel = document.getElementById('ctl-target');
-let listeningBtn = null;
-let _testOsc = null;
-let _testGain = null;
+
+const controlsPanel = app.controlsPanel = wireControlsPanel({
+  engine, editor, history,
+  listEl: document.getElementById('control-list'),
+  addBtn: document.getElementById('ctl-add-control'),
+  onChange: () => app.markDirty(),
+});
 
 function refreshControlTargets() {
   const current = player.target;
   ctlTargetSel.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '(none)';
+  ctlTargetSel.appendChild(none);
   editor.selectables.forEach((e, i) => {
     const opt = document.createElement('option');
     opt.value = String(i);
     opt.textContent = e.object3D.name || e.constructor.name;
     ctlTargetSel.appendChild(opt);
   });
+
   let idx = editor.selectables.findIndex((e) => e === current);
   if (idx === -1) {
-    // fall back to entity named 'Player', otherwise the first available entity
+    // Only auto-bind to an object actually named "Player". This used to fall back
+    // to index 0, so the first object you added silently became the player —
+    // and then got a rigid body and fell out of the world on Play.
     idx = editor.selectables.findIndex((e) => (e.object3D.name || '').toLowerCase() === 'player');
-    if (idx === -1) idx = 0;
-    player.target = editor.selectables[idx] || null;
+    player.target = idx === -1 ? null : editor.selectables[idx];
   }
-  ctlTargetSel.value = String(idx);
+  ctlTargetSel.value = idx === -1 ? '' : String(idx);
+  controlsPanel.render(); // its "Who" dropdowns list every object by name
 }
 
-ctlTargetSel.addEventListener('change', () => {
-  const i = parseInt(ctlTargetSel.value, 10);
-  const entity = Number.isInteger(i) ? editor.selectables[i] : null;
-  player.target = entity || null;
-  refreshControlTargets();
-});
-
-function prettyCode(code) {
-  if (code.startsWith('Arrow')) return code.slice(5) + ' arrow';
-  return code.replace(/^Key/, '').replace(/^Digit/, '');
-}
-
-function renderBindings() {
-  bindList.innerHTML = '';
-  for (const action of BIND_ACTIONS) {
-    const row = document.createElement('div');
-    row.className = 'bind-row';
-    const label = document.createElement('label');
-    label.textContent = action;
-    const btn = document.createElement('button');
-    btn.className = 'bind-btn';
-    btn.dataset.action = action;
-    btn.textContent = (player.controls[action] || []).map(prettyCode).join(' / ') || '—';
-    btn.title = 'Click, then press a key to rebind. Right-click to clear.';
-    btn.addEventListener('click', () => {
-      if (listeningBtn) listeningBtn.classList.remove('listening');
-      listeningBtn = btn;
-      btn.classList.add('listening');
-      btn.textContent = 'press a key…';
-    });
-    btn.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      const beforeCodes = (player.controls[action] || []).slice();
-      if (beforeCodes.length === 0) return;
-      player.controls[action] = [];
-      renderBindings();
-      recordControlsChange(action, beforeCodes, []);
-    });
-    row.appendChild(label);
-    row.appendChild(btn);
-    bindList.appendChild(row);
-  }
-}
-
-// capture the next keydown while a binding button is "listening"
-window.addEventListener('keydown', (e) => {
-  if (!listeningBtn) return;
-  e.preventDefault();
-  const action = listeningBtn.dataset.action;
-  const beforeCodes = (player.controls[action] || []).slice();
-  // keep arrow-key alternates for movement actions; replace everything else
-  const keep = action === 'jump' ? [] : beforeCodes.filter((c) => c.startsWith('Arrow'));
-  const afterCodes = [...keep, e.code];
-  player.controls[action] = afterCodes;
-  listeningBtn.classList.remove('listening');
-  listeningBtn = null;
-  renderBindings();
-  recordControlsChange(action, beforeCodes, afterCodes);
-}, true);
-
-document.getElementById('ctl-enabled').addEventListener('change', (e) => {
-  const before = player.enabled;
-  const after = e.target.checked;
-  recordValue(player, 'enabled', before, after, (v) => { player.enabled = v; e.target.checked = v; }, 'player enabled');
-  player.enabled = after;
-});
-bindSlider('ctl-speed', 'speed', player, (v) => { player.speed = v; }, 'player speed');
-bindSlider('ctl-jump', 'jumpVelocity', player, (v) => { player.jumpVelocity = v; }, 'player jump');
-
-// player control target dropdown
+// which object is the player (undoable)
 {
   let ctlTargetBefore = player.target;
   ctlTargetSel.addEventListener('focus', () => { ctlTargetBefore = player.target; });
@@ -497,67 +409,60 @@ bindSlider('ctl-jump', 'jumpVelocity', player, (v) => { player.jumpVelocity = v;
     }, 'player target');
     player.target = after;
     ctlTargetBefore = after;
+    refreshControlTargets();
   });
 }
 
-// keybinding rebinds — record control map changes
-function recordControlsChange(action, beforeCodes, afterCodes) {
-  if (JSON.stringify(beforeCodes) === JSON.stringify(afterCodes)) return;
-  history.push({
-    label: `bind ${action}`,
-    undo() { player.controls[action] = beforeCodes.slice(); renderBindings(); },
-    redo() { player.controls[action] = afterCodes.slice(); renderBindings(); },
-  });
-}
+wireAudioMixer(app); // src/app/audio-mixer.js
 
-// mute toggle (defensive: the controls panel may be absent in a cached/old HTML)
-const muteCheck = document.getElementById('aud-mute');
-function refreshMute() {
-  const muted = muteCheck?.checked ?? false;
-  // Three.js AudioListener exposes the master gain node as `.gain`
-  if (engine.listener.gain) engine.listener.gain.value = muted ? 0 : 1;
-}
-if (muteCheck) muteCheck.addEventListener('change', refreshMute);
+wireGamePanel(app); // src/app/game-panel.js
+wireScreensPanel(app); // src/app/screens-panel.js
+installTerrainBrush(editor); // sculpt & paint a selected terrain (src/editor/terrain-brush.js)
+// ---- languages (Game panel): set up once the project exists (below) ----
+let languagesPanel = null;
 
-// test tone buttons
-const testBtn = document.getElementById('aud-test');
-const stopTestBtn = document.getElementById('aud-stop-test');
-function stopTestTone() {
-  if (_testOsc) { _testOsc.stop(); _testOsc.disconnect(); _testOsc = null; }
-  if (_testGain) { _testGain.disconnect(); _testGain = null; }
-  if (testBtn) testBtn.disabled = false;
-  if (stopTestBtn) stopTestBtn.disabled = true;
-}
-function startTestTone() {
-  engine.unlockAudio();
-  const ctx = engine.listener.context;
-  if (!ctx) return;
-  if (muteCheck?.checked) return;
-  _testGain = ctx.createGain();
-  _testGain.gain.value = 0.15;
-  _testGain.connect(ctx.destination);
-  _testOsc = ctx.createOscillator();
-  _testOsc.type = 'sawtooth';
-  _testOsc.frequency.value = 220;
-  _testOsc.connect(_testGain);
-  _testOsc.start();
-  // quick "pew" envelope: ramp frequency down
-  _testOsc.frequency.setValueAtTime(880, ctx.currentTime);
-  _testOsc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.25);
-  _testGain.gain.setValueAtTime(0.15, ctx.currentTime);
-  _testGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
-  _testOsc.stop(ctx.currentTime + 0.28);
-  _testOsc.onended = stopTestTone;
-  if (testBtn) testBtn.disabled = true;
-  if (stopTestBtn) stopTestBtn.disabled = false;
-}
-if (testBtn) testBtn.addEventListener('click', startTestTone);
-if (stopTestBtn) stopTestBtn.addEventListener('click', stopTestTone);
-
-renderBindings();
 
 // ---- scene save/load + undo/redo ----
-const serializer = new SceneSerializer(engine, editor, rig, player, assets);
+const serializer = app.serializer = new SceneSerializer(engine, editor, rig, player, assets);
+
+// ---- levels: the game is a list of them; one is in the editor at a time ----
+const project = app.project = new Project(serializer);
+
+// ---- languages (Game panel): the game played in several, its texts translated (i18n.js) ----
+languagesPanel = app.languagesPanel = wireLanguagesPanel({
+  get: () => engine.ui.languages,
+  set: (next, label) => {
+    const before = engine.ui.languages;
+    const apply = (v) => {
+      engine.ui = normalizeUI({ ...engine.ui, languages: v });
+      languagesPanel.refresh();
+      app.markDirty();
+    };
+    if (JSON.stringify(before) === JSON.stringify(next)) return;
+    history.push({ label, undo: () => apply(before), redo: () => apply(next) });
+    apply(next);
+  },
+  texts: () => collectTexts(project.toJSON(), engine.ui),
+});
+
+// prefabs are built by the serializer and shared by every level of the project
+editor.serializer = serializer;
+editor.project = project;
+// a level just loaded: controls and variables were re-applied after it, so refresh again
+project.onLoaded = () => window.dispatchEvent(new CustomEvent('tiny3:player-loaded'));
+const levelsPanel = app.levelsPanel = wireLevelsPanel({
+  project,
+  listEl: document.getElementById('level-list'),
+  addBtn: document.getElementById('level-add'),
+  open: async (index) => {
+    await project.open(index);
+    history.clear(); // undo does not reach across levels
+    refreshHistoryButtons();
+  },
+  onChange: () => app.markDirty(),
+});
+
+wireFiles(app); // src/app/files.js
 
 const undoBtn = document.getElementById('btn-undo');
 const redoBtn = document.getElementById('btn-redo');
@@ -565,212 +470,222 @@ function refreshHistoryButtons() {
   undoBtn.disabled = !history.canUndo;
   redoBtn.disabled = !history.canRedo;
 }
-history.onChange = () => { refreshHistoryButtons(); markDirty(); };
+history.onChange = () => { refreshHistoryButtons(); app.markDirty(); app.refreshPrefabStatusSoon(); };
 undoBtn.addEventListener('click', () => history.undo());
 redoBtn.addEventListener('click', () => history.redo());
 document.getElementById('btn-copy').addEventListener('click', () => editor.copySelection());
 document.getElementById('btn-paste').addEventListener('click', () => editor.pasteSelection());
 // refresh asset browser after paste so any newly pasted objects can be saved as prefabs
 const origPasteSelection = editor.pasteSelection.bind(editor);
-editor.pasteSelection = function () {
-  const result = origPasteSelection();
-  renderAssetBrowser();
+editor.pasteSelection = async function () {
+  const result = await origPasteSelection();
+  app.renderAssetBrowser();
   return result;
 };
-document.getElementById('btn-save').addEventListener('click', () => serializer.saveToFile());
-const exporter = new GameExporter(serializer);
-document.getElementById('btn-export')?.addEventListener('click', () => exporter.exportToFile());
-document.getElementById('btn-load').addEventListener('click', () => {
-  serializer.loadFromFile().then((made) => {
-    if (made) { history.clear(); refreshCamTargets(); refreshControlTargets(); }
-  }).catch(() => {});
+document.getElementById('btn-save').addEventListener('click', () => app.saveProjectSafely());
+const exporter = new GameExporter(serializer, project); // every level goes in the game
+// Export: one file, a website (.zip), or a website straight into a folder
+const exportDialog = document.getElementById('export-dialog');
+const canWriteFolders = typeof window.showDirectoryPicker === 'function';
+{
+  const folderCard = exportDialog?.querySelector('[data-export="folder"]');
+  if (folderCard && !canWriteFolders) {
+    folderCard.disabled = true;
+    document.getElementById('export-folder-note').textContent = 'Needs Chrome or Edge — use the .zip here';
+  }
+}
+document.getElementById('btn-export')?.addEventListener('click', () => {
+  exportDialog.hidden = false;
+  exportDialog.querySelector('[data-export]')?.focus();
 });
+const closeExportDialog = () => { exportDialog.hidden = true; };
+document.getElementById('export-cancel')?.addEventListener('click', closeExportDialog);
+window.addEventListener('keydown', (e) => {
+  if (!exportDialog.hidden && e.code === 'Escape') closeExportDialog();
+});
+exportDialog?.addEventListener('click', async (e) => {
+  if (e.target === exportDialog) { closeExportDialog(); return; } // the backdrop
+  const card = e.target.closest?.('[data-export]');
+  if (!card || card.disabled) return;
+  closeExportDialog();
+  const button = document.getElementById('btn-export');
+  const label = button.innerHTML;
+  // packing Three.js, the engine and every file takes a moment
+  button.disabled = true;
+  button.textContent = '⏳ Exporting…';
+  try {
+    const kind = card.dataset.export;
+    if (kind === 'file') await exporter.exportToFile();
+    else if (kind === 'zip') {
+      await exporter.exportSiteZip();
+      showNotice('Unzip it onto your web host — for GitHub Pages, into the repository, then turn Pages on '
+        + '(Settings → Pages). index.html is the game.', { seconds: 15 });
+    } else {
+      const folder = await exporter.exportSiteToFolder();
+      if (folder) showNotice(`The game is in "${folder}": open index.html there on a web host (GitHub Pages), not by double-click.`, { seconds: 15 });
+    }
+  } catch (err) {
+    console.error('[Tiny3] export failed:', err);
+    showNotice(`Export failed: ${err.message}`, { kind: 'error', seconds: 0, actions: [{ label: 'OK' }] });
+  } finally {
+    button.disabled = false;
+    button.innerHTML = label;
+  }
+});
+document.getElementById('btn-load').addEventListener('click', app.loadProjectFile);
 refreshHistoryButtons();
 
-// ---- play / edit mode ----
-// Edit mode: full editor. Play mode: editing is locked and the simulation
-// runs; stopping reverts the scene to the exact snapshot taken at Play.
-const playBtn = document.getElementById('btn-play');
-let playing = false;
-let playSnapshot = null;
-
-function enterPlay() {
-  if (playing) return;
-  playing = true;
-  playSnapshot = serializer.serialize();
-  editor.select(null);
-  player.enabled = true;
-  document.body.classList.add('playing');
-  playBtn.classList.add('playing');
-  playBtn.textContent = '⏹ Stop';
-  editor.statusPrefix = '▶ PLAYING · ';
-  editor._renderStatus();
-  // start ambient/global autoplay sounds
-  engine.unlockAudio();
-  for (const rec of engine.sounds) {
-    if (rec.autoplay && rec.type !== 'positional' && !rec.audio.isPlaying) {
-      rec.audio.play();
-    }
-  }
-  // start positional autoplay sounds
-  for (const rec of engine.sounds) {
-    if (rec.autoplay && rec.type === 'positional' && !rec.audio.isPlaying) {
-      rec.audio.play();
-    }
-  }
-}
-
-async function exitPlay() {
-  if (!playing) return;
-  playing = false;
-  document.body.classList.remove('playing');
-  playBtn.classList.remove('playing');
-  playBtn.textContent = '▶ Play';
-  editor.statusPrefix = '';
-  const snap = playSnapshot;
-  playSnapshot = null;
-  engine.stopAllSounds();
-  if (snap) {
-    await serializer.deserialize(snap); // revert anything the simulation changed
-    history.clear();
-    refreshHistoryButtons();
-    refreshCamTargets();
-    refreshControlTargets();
-  }
-  editor._renderStatus();
-}
-
-playBtn.addEventListener('click', () => (playing ? exitPlay() : enterPlay()));
-window.addEventListener('keydown', (e) => { if (playing && e.code === 'Escape') exitPlay(); });
-
-// ---- autosave: persist the scene to localStorage shortly after any edit ----
-const AUTOSAVE_KEY = 'tiny3.autosave';
-const AUTOSAVE_VERSION_KEY = 'tiny3.autosaveVersion';
-const AUTOSAVE_VERSION = '3'; // bump to clear old default scenes
-let _dirtyTimer = null;
-
-// one-time migration: clear autosaves from older versions so the new empty-scene boot applies
-if (localStorage.getItem(AUTOSAVE_VERSION_KEY) !== AUTOSAVE_VERSION) {
-  localStorage.removeItem(AUTOSAVE_KEY);
-  localStorage.setItem(AUTOSAVE_VERSION_KEY, AUTOSAVE_VERSION);
-}
-
-function markDirty() {
-  if (playing) return; // play-mode changes are temporary — don't save them
-  clearTimeout(_dirtyTimer);
-  _dirtyTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(serializer.serialize()));
-    } catch (err) {
-      console.warn('[Tiny3] autosave failed:', err);
-    }
-  }, 1500);
-}
-
-// any field edit in any panel (inspector, camera, controls) marks dirty
-document.addEventListener('input', () => markDirty(), true);
+wirePlayMode(app); // src/app/play-mode.js
+wireToolsDrawer(app); // src/app/tools-drawer.js: Logic graph, Debugger, Profiler, Modules
 
 // debug/test handle
-window.__tiny3 = { enterPlay, exitPlay, isPlaying: () => playing, markDirty, serializer, editor, exporter };
+window.__tiny3 = {
+  enterPlay: app.enterPlay, exitPlay: app.exitPlay, isPlaying: app.isPlaying, markDirty: app.markDirty,
+  serializer, editor, exporter, project, tools: app.tools,
+};
 
-// keyboard shortcuts for undo/redo/save/load (not while typing in a field)
+// keyboard shortcuts for undo/redo/save/load and copy/paste/duplicate
 window.addEventListener('keydown', (e) => {
-  if (playing) return; // editing shortcuts are locked while playing
-  const a = document.activeElement;
-  const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') &&
-    a.type !== 'range' && a.type !== 'checkbox';
-  const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.code === 'KeyZ' && !e.shiftKey) { e.preventDefault(); if (!typing) history.undo(); }
-  else if (mod && (e.code === 'KeyY' || (e.code === 'KeyZ' && e.shiftKey))) { e.preventDefault(); if (!typing) history.redo(); }
-  else if (mod && e.code === 'KeyS') { e.preventDefault(); serializer.saveToFile(); }
-  else if (mod && e.code === 'KeyO') {
-    e.preventDefault();
-    serializer.loadFromFile().then((made) => { if (made) { history.clear(); refreshCamTargets(); refreshControlTargets(); } }).catch(() => {});
+  if (app.isPlaying()) return; // editing shortcuts are locked while playing
+  if (!(e.ctrlKey || e.metaKey)) return;
+  // save and open work from anywhere
+  if (e.code === 'KeyS') { e.preventDefault(); app.saveProjectSafely(); return; }
+  if (e.code === 'KeyO') { e.preventDefault(); app.loadProjectFile(); return; }
+  // In a field, undo, copy and paste are the text's own. They used to be taken
+  // over: Ctrl+V pasted an object into the scene instead of the text, and
+  // Ctrl+Z could not undo typing in the script box.
+  if (isTyping()) {
+    if (e.code === 'KeyD') e.preventDefault(); // not the browser's bookmark dialog
+    return;
   }
-  else if (mod && e.code === 'KeyC') { e.preventDefault(); editor.copySelection(); }
-  else if (mod && e.code === 'KeyV') { e.preventDefault(); editor.pasteSelection(); }
-  else if (mod && e.code === 'KeyD') { e.preventDefault(); editor.duplicateSelection(); }
+  if (e.code === 'KeyZ' && !e.shiftKey) { e.preventDefault(); history.undo(); }
+  else if (e.code === 'KeyY' || (e.code === 'KeyZ' && e.shiftKey)) { e.preventDefault(); history.redo(); }
+  else if (e.code === 'KeyC') { e.preventDefault(); editor.copySelection(); }
+  else if (e.code === 'KeyV') { e.preventDefault(); editor.pasteSelection(); }
+  else if (e.code === 'KeyD') { e.preventDefault(); editor.duplicateSelection(); }
 });
 
-// when a scene is loaded, refresh the player-controls panel to match
+// when a scene is loaded, refresh the panels to match
 window.addEventListener('tiny3:player-loaded', () => {
-  document.getElementById('ctl-enabled').checked = player.enabled;
-  document.getElementById('ctl-speed').value = player.speed;
-  document.getElementById('ctl-speed-v').textContent = player.speed;
-  document.getElementById('ctl-jump').value = player.jumpVelocity;
-  document.getElementById('ctl-jump-v').textContent = player.jumpVelocity;
-  player.onFire = (p, eng) => {
-    if (muteCheck.checked) return;
-    eng.playEntitySounds(controlledEntity(p), { trigger: 'fire' });
-  };
-  player.onJump = (p, eng) => {
-    if (muteCheck.checked) return;
-    eng.playEntitySounds(controlledEntity(p), { trigger: 'jump' });
-  };
-  renderBindings();
   refreshCamTargets();
-  refreshControlTargets();
+  refreshControlTargets(); // also re-renders the scene's controls
+  if (camPlayModeSel) camPlayModeSel.value = rig.playMode || '';
+  // a loaded game brings its own camera settings (the panel used to keep showing the old ones)
+  cameraPanel.showTab(rig.playMode || rig.mode);
+  app.syncTitleUI(); // a loaded game brings its own title screen and HUD styles
+  document.querySelectorAll('.cam-btn').forEach((b) =>
+    b.classList.toggle('active', b.dataset.mode === rig.mode));
+  app.syncMixUI();             // a loaded scene brings its own mix...
+  app.renderSceneAudio();      // ...and its own music and ambience
+  app.renderVariables(); // a loaded scene brings its own variables
+  app.renderScreensPanel?.(); // ...its own screens and dialogues
+  envPanel.refresh(); // ...and its own lighting
 });
 
 // ---- per-frame logic ----
+let _controlNames = '';
 engine.onUpdate = (dt, eng) => {
-  if (!playing) {
-    // camera hotkeys
+  // single-key shortcuts are ignored while typing into a field: a "3" typed into
+  // a position switched to first person, and an "l" opened the file picker
+  if (!app.isPlaying() && !isTyping()) {
+    // H toggles the hand tool; 1–4 pick the camera
+    if (input.wasPressed('KeyH')) setPanTool(!rig.panTool);
     if (input.wasPressed('Digit1')) setCamMode('orbit');
     if (input.wasPressed('Digit2')) setCamMode('follow');
+    if (input.wasPressed('Digit3')) setCamMode('fps');
     if (input.wasPressed('Digit4')) setCamMode('free');
 
     // L — load a GLB model from disk
-    if (input.wasPressed('KeyL')) {
-      assets.pickAndLoad({ position: [0, 0, 0] }).then((obj) => {
-        if (obj) {
-          const entity = addProp(obj, obj.name);
-          editor.recordAdd(entity);
-          editor.select(entity);
-        }
-      });
-    }
-
-    editor.update(dt); // selection, gizmo, delete — edit-mode only
+    if (input.wasPressed('KeyL')) app.importModel();
   }
+
+  if (!app.isPlaying()) editor.update(dt); // selection, gizmo, delete — edit-mode only
 
   if (rig.enabled !== false) rig.update(dt, input);
 
   // keep the camera-target dropdown in sync with the hierarchy
   if (camTargetSel.options.length !== editor.selectables.length + 1) refreshCamTargets();
-  // keep the player-controls target dropdown in sync and fall back if the target was deleted
-  if (ctlTargetSel.options.length !== editor.selectables.length) {
-    refreshControlTargets();
-  } else if (player.target && !editor.selectables.includes(player.target)) {
+  // scrolling zooms and panning releases the target: show what the camera did by itself
+  cameraPanel.syncLive();
+  // keep the controls panel's object lists in step with the hierarchy — adds,
+  // deletes and renames (not during play, when spawns come and go)
+  if (!app.isPlaying()) {
+    const names = editor.selectables.map((e) => e.object3D.name).join('\n');
+    if (names !== _controlNames) {
+      _controlNames = names;
+      refreshControlTargets();
+    }
+  }
+  // fall back to the hidden default player if the chosen one was deleted
+  if (player.target && !editor.selectables.includes(player.target)) {
     player.target = null;
     refreshControlTargets();
   }
-
-  input.endFrame();
+  if (app.isPlaying()) app.overlay.update(); // the "E  Open door" prompt
+  // input.endFrame() is now driven by the engine so it also runs while paused
 };
 
 refreshCamTargets();
 refreshControlTargets();
 
+/**
+ * Prefabs used to be kept in this browser, outside any game — lost with a new
+ * browser and missing from saved files and exports. Move them into the open
+ * project, once.
+ */
+function adoptLegacyPrefabs() {
+  let old;
+  try {
+    old = JSON.parse(localStorage.getItem(ObjectEditor.LEGACY_PREFAB_KEY) || 'null');
+  } catch { old = null; }
+  if (!old || typeof old !== 'object') return;
+  let moved = 0;
+  for (const [name, rec] of Object.entries(old)) {
+    const converted = legacyPrefab(rec);
+    if (!converted || engine.prefabs.has(name)) continue;
+    engine.prefabs.set(name, converted);
+    moved++;
+  }
+  try { localStorage.removeItem(ObjectEditor.LEGACY_PREFAB_KEY); } catch { /* storage blocked */ }
+  if (moved) {
+    console.log(`[Tiny3] moved ${moved} prefab(s) into the game`);
+    app.markDirty();
+  }
+}
+
 // restore the last autosaved scene (if any) so a refresh loses nothing, then add the runtime ground collider
 (async () => {
   try {
-    const saved = localStorage.getItem(AUTOSAVE_KEY);
+    // the browser's database — or, saved by an older version, localStorage
+    let saved = await savedGames.get('autosave').catch(() => null);
+    const fromLocalStorage = !saved && !!(saved = localStorage.getItem(app.AUTOSAVE_KEY));
     if (saved) {
-      const data = JSON.parse(saved);
-      if (data.version === 1) {
-        const made = await serializer.deserialize(data);
-        if (made && made.length) {
-          history.clear();
-          refreshHistoryButtons();
-          refreshCamTargets();
-          console.log('[Tiny3] restored autosaved scene');
-        }
+      // every level — or, from before levels existed, the one scene
+      const restored = JSON.parse(saved);
+      await project.load(restored);
+      history.clear();
+      refreshHistoryButtons();
+      levelsPanel.render();
+      if (restored.scriptsOff) app.askAboutScripts(countScripts(restored)); // opened from a file, never trusted
+      console.log('[Tiny3] restored autosaved game');
+      if (fromLocalStorage) { // moved into the database, where it has room to grow
+        await savedGames.put('autosave', saved);
+        localStorage.removeItem(app.AUTOSAVE_KEY);
       }
     }
   } catch (err) {
     console.warn('[Tiny3] autosave restore failed:', err);
   }
+  adoptLegacyPrefabs();
 
   engine.start();
+  // Quietly clear out files nothing has needed for a month. Only at startup,
+  // when there is no undo history or clipboard that could still want one.
+  try {
+    const { removed, bytes } = await assetStore.prune(app.assetsWanted(), { unusedFor: app.UNUSED_FOR });
+    if (removed) console.log(`[Tiny3] removed ${removed} unused file(s), ${app.formatBytes(bytes)}`);
+  } catch (err) {
+    console.warn('[Tiny3] asset cleanup failed:', err);
+  }
+  app.refreshStorage();
 })();

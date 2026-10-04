@@ -1,35 +1,23 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { Entity } from './entity.js';
-import { RigidBody, BODY_TYPES } from './physics.js';
+import { RAD } from './editor/shared.js';
+import { escapeHtml } from './ui.js';
+import { undoMethods } from './editor/history.js';
+import { clipboardMethods } from './editor/clipboard.js';
+import { prefabMethods } from './editor/prefabs.js';
+import { hierarchyMethods } from './editor/hierarchy.js';
+import { inspectorMethods } from './editor/inspector.js';
+import { generatorSectionMethods } from './editor/generator-section.js';
+import { physicsSectionMethods } from './editor/physics-section.js';
+import { scriptSectionMethods } from './editor/script-section.js';
+import { animationSectionMethods } from './editor/animation-section.js';
+import { audioSectionMethods } from './editor/audio-section.js';
+import { lightingMethods } from './editor/lighting.js';
+import { viewSectionMethods } from './editor/view-section.js';
 
-const DEG = 180 / Math.PI;
-const RAD = Math.PI / 180;
-
-const PRIMITIVE_GEOS = {
-  box: () => new THREE.BoxGeometry(1.5, 1.5, 1.5),
-  sphere: () => new THREE.SphereGeometry(0.9, 32, 16),
-  cone: () => new THREE.ConeGeometry(0.9, 2, 24),
-  cylinder: () => new THREE.CylinderGeometry(0.7, 0.7, 1.8, 24),
-  torus: () => new THREE.TorusGeometry(0.9, 0.35, 16, 40),
-};
-
-const LIGHT_TYPES = {
-  directional: (d) => new THREE.DirectionalLight(d.color, d.intensity),
-  point: (d) => new THREE.PointLight(d.color, d.intensity, d.distance ?? 0, d.decay ?? 2),
-  spot: (d) => new THREE.SpotLight(d.color, d.intensity, d.distance ?? 0, d.angle ?? Math.PI / 6, d.penumbra ?? 0, d.decay ?? 2),
-  ambient: (d) => new THREE.AmbientLight(d.color, d.intensity),
-};
-
-function primitiveKind(geo) {
-  if (!geo) return null;
-  if (geo.type === 'BoxGeometry') return 'box';
-  if (geo.type === 'SphereGeometry') return 'sphere';
-  if (geo.type === 'ConeGeometry') return 'cone';
-  if (geo.type === 'CylinderGeometry') return 'cylinder';
-  if (geo.type === 'TorusGeometry') return 'torus';
-  return null;
-}
+// re-exported so existing callers keep importing them from here
+export { escapeHtml };
+export { LightEntity } from './light-entity.js';
 
 /**
  * ObjectEditor — scene editing with a real transform gizmo.
@@ -53,13 +41,23 @@ function primitiveKind(geo) {
  *   editor.setGizmoMode('rotate');  // 'translate' | 'rotate' | 'scale'
  */
 export class ObjectEditor {
-  constructor(engine, { listEl = null, inspectorEl = null, statusEl = null, onModeChange = null, history = null } = {}) {
+  constructor(engine, {
+    listEl = null, inspectorEl = null, statusEl = null,
+    shapeEl = null, materialEl = null, audioEl = null, lightListEl = null,
+    onModeChange = null, history = null, assets = null,
+  } = {}) {
     this.engine = engine;
     this.listEl = listEl;
     this.inspectorEl = inspectorEl;
+    // each concern renders into its own panel
+    this.shapeEl = shapeEl;         // position / rotation / scale
+    this.materialEl = materialEl;   // colour, surface, texture
+    this.audioEl = audioEl;         // the selected object's sounds
+    this.lightListEl = lightListEl; // every light in the scene
     this.statusEl = statusEl;
     this.onModeChange = onModeChange;
     this.history = history; // optional History instance for undo/redo
+    this.assets = assets;   // AssetLoader, needed to paste/instantiate GLB models
 
     this.selectables = [];
     this.selected = null;
@@ -103,6 +101,11 @@ export class ObjectEditor {
         else this._recordTransform();
       }
     });
+    // A press on a gizmo handle is not a scene click. Selection now happens on
+    // release, by which time the gizmo has finished — so without this, tapping
+    // a handle without moving would raycast past it and select what's behind.
+    this._suppressNextTap = false;
+    this.gizmo.addEventListener('mouseDown', () => { this._suppressNextTap = true; });
 
     // --- selection highlight ---
     this._helper = new THREE.BoxHelper(new THREE.Object3D(), 0x4dd0a6);
@@ -163,10 +166,13 @@ export class ObjectEditor {
       const dx = o.scale.x - base.scale.x;
       const dy = o.scale.y - base.scale.y;
       const dz = o.scale.z - base.scale.z;
-      // keep scale positive: add scaled delta to base, clamp near zero
-      o.scale.x = Math.max(0.01, base.scale.x + dx * s);
-      o.scale.y = Math.max(0.01, base.scale.y + dy * s);
-      o.scale.z = Math.max(0.01, base.scale.z + dz * s);
+      // keep scale positive: add scaled delta to base, clamp near zero. The floor
+      // follows the object's own size — a fixed 0.01 made a model in
+      // millimetres (scale 0.001) jump ten times bigger at the first touch.
+      const floor = (b) => Math.min(0.01, Math.abs(b) / 10) || 0.01;
+      o.scale.x = Math.max(floor(base.scale.x), base.scale.x + dx * s);
+      o.scale.y = Math.max(floor(base.scale.y), base.scale.y + dy * s);
+      o.scale.z = Math.max(floor(base.scale.z), base.scale.z + dz * s);
     }
   }
 
@@ -288,90 +294,6 @@ export class ObjectEditor {
 
   get gizmoMode() { return this._gizmoMode; }
 
-  // ---------- undo/redo helpers ----------
-
-  /** Snapshot the selected object's transform (position/rotation/scale). */
-  _snapshot() {
-    const o = this.selected?.object3D;
-    if (!o) return null;
-    return {
-      position: o.position.clone(),
-      rotation: o.rotation.clone(),
-      scale: o.scale.clone(),
-    };
-  }
-
-  _snapshotMulti() {
-    const map = new Map();
-    for (const e of this.selectedSet) {
-      const o = e.object3D;
-      map.set(e, { position: o.position.clone(), rotation: o.rotation.clone(), scale: o.scale.clone() });
-    }
-    return map;
-  }
-
-  _applySnapshot(o, snap) {
-    o.position.copy(snap.position);
-    o.rotation.copy(snap.rotation);
-    o.scale.copy(snap.scale);
-    this._helper.setFromObject(o);
-    this._syncInspector();
-    this._updateSolidHelper(this.selected);
-  }
-
-  _applySnapshotMulti(map) {
-    for (const [e, snap] of map) {
-      const o = e.object3D;
-      o.position.copy(snap.position);
-      o.rotation.copy(snap.rotation);
-      o.scale.copy(snap.scale);
-      this._updateSolidHelper(e);
-    }
-    const primary = this._primarySelection();
-    if (primary) this._helper.setFromObject(primary.object3D);
-    this._syncInspector();
-  }
-
-  /** After a gizmo drag ends, record the before/after transform for undo. */
-  _recordTransform() {
-    const before = this._dragStart;
-    this._dragStart = null;
-    const o = this.selected?.object3D;
-    if (!before || !o || !this.history) return;
-    const after = this._snapshot();
-    // ignore no-op drags (clicked a handle but didn't move)
-    if (before.position.equals(after.position) &&
-        before.rotation.equals(after.rotation) &&
-        before.scale.equals(after.scale)) return;
-    const self = this;
-    this.history.push({
-      label: 'transform',
-      undo() { self._applySnapshot(o, before); },
-      redo() { self._applySnapshot(o, after); },
-    });
-  }
-
-  _recordTransformMulti() {
-    const before = this._dragStartMulti;
-    this._dragStartMulti = null;
-    if (!before || !this.history) return;
-    const after = this._snapshotMulti();
-    let changed = false;
-    for (const [e, b] of before) {
-      const a = after.get(e);
-      if (!a || !b.position.equals(a.position) || !b.rotation.equals(a.rotation) || !b.scale.equals(a.scale)) {
-        changed = true; break;
-      }
-    }
-    if (!changed) return;
-    const self = this;
-    this.history.push({
-      label: 'transform multi',
-      undo() { self._applySnapshotMulti(before); },
-      redo() { self._applySnapshotMulti(after); },
-    });
-  }
-
   _applySnap(o) {
     const snap = (v, step) => step > 0 ? Math.round(v / step) * step : v;
     if (this.snap.translate > 0 && this._gizmoMode === 'translate') {
@@ -413,129 +335,23 @@ export class ObjectEditor {
     }
   }
 
-  /** Record an add/remove so it can be undone/redone. */
-  recordAdd(entity) { this._recordAddRemove(entity, true); }
-  recordRemove(entity) { this._recordAddRemove(entity, false); }
-
-  /** Record an add/remove so it can be undone/redone. */
-  _recordAddRemove(entity, added) {
-    if (!this.history) return;
-    const self = this;
-    const add = () => { self.engine.add(entity); self.register(entity); };
-    const remove = () => {
-      if (self.selected === entity) self.select(null);
-      if (typeof entity.destroy === 'function') entity.destroy(self.engine);
-      else self.engine.remove(entity);
-      self.unregister(entity);
-    };
-    this.history.push({
-      label: added ? 'add' : 'delete',
-      undo: added ? remove : add,
-      redo: added ? add : remove,
-    });
-  }
-
-  // ---------- generic property undo helpers ----------
-
-  /**
-   * Record a single-value property change command.
-   *   target: object to mutate
-   *   prop:   property name
-   *   before: previous value (primitive clone)
-   *   after:  new value
-   *   apply:  optional function(value) to apply the value
-   */
-  _recordValue(target, prop, before, after, apply = null, label = 'edit') {
-    if (!this.history || before === after) return;
-    const self = this;
-    const doApply = (v) => {
-      if (apply) apply(v);
-      else target[prop] = v;
-      self._renderInspector?.();
-      self._renderHierarchy?.();
-    };
-    this.history.push({
-      label,
-      undo() { doApply(before); },
-      redo() { doApply(after); },
-    });
-  }
-
-  /**
-   * Record a THREE.Color property change command.
-   */
-  _recordColor(target, prop, beforeHex, afterHex, label = 'color') {
-    if (!this.history || beforeHex === afterHex) return;
-    const self = this;
-    this.history.push({
-      label,
-      undo() { target[prop].set(beforeHex); self._renderInspector?.(); },
-      redo() { target[prop].set(afterHex); self._renderInspector?.(); },
-    });
-  }
-
-  /**
-   * Record a Vector3 component change command.
-   */
-  _recordVector(target, beforeVec, afterVec, label = 'transform') {
-    if (!this.history || beforeVec.equals(afterVec)) return;
-    const self = this;
-    this.history.push({
-      label,
-      undo() { target.copy(beforeVec); self._helper.setFromObject(self.selected?.object3D); self._syncInspector?.(); },
-      redo() { target.copy(afterVec); self._helper.setFromObject(self.selected?.object3D); self._syncInspector?.(); },
-    });
-  }
-
-  /**
-   * Record a material map (texture) change command.
-   */
-  _recordMap(mesh, beforeMap, afterMap, label = 'texture') {
-    if (!this.history) return;
-    const self = this;
-    const m = mesh.material;
-    this.history.push({
-      label,
-      undo() {
-        if (m.map && m.map !== beforeMap) m.map.dispose();
-        m.map = beforeMap || null;
-        m.needsUpdate = true;
-        self._renderInspector?.();
-      },
-      redo() {
-        if (m.map && m.map !== afterMap) m.map.dispose();
-        m.map = afterMap || null;
-        m.needsUpdate = true;
-        self._renderInspector?.();
-      },
-    });
-  }
-
-  /**
-   * Record a sound property change command.
-   */
-  _recordSound(rec, prop, before, after, apply = null, label = 'sound') {
-    if (!this.history || before === after) return;
-    const self = this;
-    const doApply = (v) => {
-      rec[prop] = v;
-      if (apply) apply(v);
-      self._renderInspector?.();
-    };
-    this.history.push({
-      label,
-      undo() { doApply(before); },
-      redo() { doApply(after); },
-    });
-  }
-
   // ---------- per-frame ----------
 
   update(_dt) {
     const { input, camera } = this.engine;
+    // models set to play their default clip while editing (breathing, idling)
+    if (!this.engine.playing) this._previewDefaultClips();
+    // Held in view → Aiming: the first-person preview shows the held object at its aiming place
+    const rig = this.engine.cameraRig;
+    if (rig) rig.previewAim = !this.engine.playing && this._vmPose === 'aim' && !!this.selected?.viewModel;
 
-    // click to select with LEFT mouse only (right mouse is for camera control)
-    if (input.mouseClicked(0) && !this.gizmo.dragging) {
+    // Select on a TAP — press and release without dragging. Left-drag orbits the
+    // camera, so selecting on press would reselect (or deselect) whatever every
+    // orbit happened to start on. The hand tool owns the left button entirely.
+    const handPanning = this.engine.cameraRig?.isHandActive?.() === true;
+    const tapped = input.mouseTapped(0) && !this._suppressNextTap;
+    if (input.mouseReleased(0)) this._suppressNextTap = false;
+    if (tapped && !this.gizmo.dragging && !handPanning) {
       this._raycaster.setFromCamera(input.mouseNDC, camera);
       const roots = this.selectables
         .filter((e) => !e.object3D.isLight) // lights are selected via the hierarchy
@@ -549,6 +365,8 @@ export class ObjectEditor {
         });
         if (entity) {
           const additive = input.isDown('ShiftLeft') || input.isDown('ShiftRight');
+          // the part clicked is the one the Color & Texture panel shows
+          if (Number.isInteger(hit.object.userData?.part)) this._choosePart(entity, hit.object.userData.part);
           this.select(entity, { additive });
         }
       } else if (this.selected) {
@@ -576,6 +394,7 @@ export class ObjectEditor {
       if (this.gizmo.dragging) this._syncInspector();
     }
 
+    this._refreshSolidHelpers();
     this._renderStatus();
   }
 
@@ -583,398 +402,47 @@ export class ObjectEditor {
     const targets = this.selectedSet.size > 0 ? [...this.selectedSet] : (this.selected ? [this.selected] : []);
     if (!targets.length) return;
     this.select(null);
-    const self = this;
-    this.history.push({
+    // deleting takes the children too; undo brings back the whole family,
+    // with every component, rule and sound (see _captureTree)
+    let saved = this._captureTree(targets);
+    this.history?.push({
       label: targets.length > 1 ? 'delete multi' : 'delete',
-      undo() {
-        for (const e of targets) {
-          self.engine.add(e);
-          self.register(e);
-        }
-        self.select(targets[0]);
+      undo: () => {
+        this._restoreTree(saved);
+        this.select(targets[0]);
       },
-      redo() {
-        for (const e of targets) {
-          self._cleanupEntityMedia(e);
-          if (typeof e.destroy === 'function') e.destroy(self.engine);
-          else self.engine.remove(e);
-          self.unregister(e);
-        }
+      redo: () => {
+        saved = this._captureTree(targets);
+        this._removeTree(saved);
       },
     });
-    for (const e of targets) {
-      this._cleanupEntityMedia(e);
-      if (typeof e.destroy === 'function') e.destroy(this.engine);
-      else this.engine.remove(e);
-      this.unregister(e);
-    }
+    this._removeTree(saved);
   }
 
-  /** Copy the current selection to a JSON clipboard. */
-  copySelection() {
-    const targets = this.selectedSet.size > 0 ? [...this.selectedSet] : (this.selected ? [this.selected] : []);
-    if (!targets.length) return false;
-    const records = targets.map((e) => this._serializeForClipboard(e));
-    this._clipboard = JSON.stringify(records);
-    return true;
-  }
-
-  /** Paste the clipboard, creating new entities offset slightly from the originals. */
-  pasteSelection() {
-    if (!this._clipboard) return null;
-    const records = JSON.parse(this._clipboard);
-    const created = [];
-    for (const rec of records) {
-      const entity = this._deserializeFromClipboard(rec);
-      if (entity) {
-        this.engine.add(entity);
-        this.register(entity);
-        this._recordAddRemove(entity, true);
-        created.push(entity);
-      }
-    }
-    if (created.length) {
-      this.select(null);
-      for (const e of created) this.selectedSet.add(e);
-      this.selected = created[0];
-      this._renderHierarchy();
-      this._renderInspector();
-    }
-    return created;
-  }
-
-  /** Duplicate the current selection (supports multi-select). */
-  duplicateSelection() {
-    const targets = this.selectedSet.size > 0 ? [...this.selectedSet] : (this.selected ? [this.selected] : []);
-    const created = [];
-    for (const sel of targets) {
-      const o = sel.object3D;
-      const clone = o.clone(true);
-      clone.position.x += 1.5;
-      clone.name = (o.name || 'Object') + ' copy';
-      const entity = new Entity(clone);
-      entity.solid = sel.solid;
-      entity.object3D.userData.kind = o.userData.kind;
-      this.engine.add(entity);
-      this.register(entity);
-      this._recordAddRemove(entity, true);
-      created.push(entity);
-    }
-    if (created.length) {
-      this.select(null);
-      for (const e of created) this.selectedSet.add(e);
-      this.selected = created[0];
-      this._renderHierarchy();
-      this._renderInspector();
-    }
-    return created;
-  }
-
-  _serializeForClipboard(entity) {
-    const o = entity.object3D;
-    const rec = {
-      name: o.name,
-      position: { x: o.position.x, y: o.position.y, z: o.position.z },
-      rotation: { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z },
-      scale: { x: o.scale.x, y: o.scale.y, z: o.scale.z },
-      solid: entity.solid,
-      kind: o.userData.kind,
-    };
-    if (o.isLight) {
-      rec.light = {
-        type: o.isDirectionalLight ? 'directional' : o.isPointLight ? 'point' : o.isSpotLight ? 'spot' : 'ambient',
-        color: '#' + o.color.getHexString(),
-        intensity: o.intensity,
-        castShadow: !!o.castShadow,
-      };
-    }
-    const mesh = this._firstMesh(o);
-    if (mesh && mesh.material && mesh.material.isMeshStandardMaterial) {
-      const m = mesh.material;
-      rec.material = {
-        color: '#' + m.color.getHexString(),
-        metalness: m.metalness,
-        roughness: m.roughness,
-        opacity: m.opacity,
-        wireframe: !!m.wireframe,
-      };
-    }
-    if (o.userData.assetUrl) rec.assetUrl = o.userData.assetUrl;
-    if (o.geometry && !rec.assetUrl) {
-      const kind = primitiveKind(o.geometry);
-      if (kind) rec.primitive = kind;
-    }
-    return rec;
-  }
-
-  _deserializeFromClipboard(rec) {
-    let object3D;
-    if (rec.light) {
-      const light = LIGHT_TYPES[rec.light.type](rec.light);
-      light.castShadow = !!rec.light.castShadow;
-      object3D = light;
-    } else if (rec.assetUrl) {
-      // GLB paste: can't load synchronously; skip
-      return null;
-    } else if (rec.primitive) {
-      const geo = (PRIMITIVE_GEOS[rec.primitive] || PRIMITIVE_GEOS.box)();
-      const m = rec.material || {};
-      const mat = new THREE.MeshStandardMaterial({
-        color: m.color || 0x539bf5,
-        metalness: m.metalness ?? 0,
-        roughness: m.roughness ?? 1,
-        opacity: m.opacity ?? 1,
-        wireframe: !!m.wireframe,
-        transparent: (m.opacity ?? 1) < 1,
-      });
-      object3D = new THREE.Mesh(geo, mat);
-      object3D.castShadow = object3D.receiveShadow = true;
-    } else {
-      return null;
-    }
-    object3D.name = rec.name;
-    object3D.position.set(rec.position.x + 1.5, rec.position.y, rec.position.z);
-    object3D.rotation.set(rec.rotation.x, rec.rotation.y, rec.rotation.z);
-    object3D.scale.set(rec.scale.x, rec.scale.y, rec.scale.z);
-    object3D.userData.kind = rec.kind || 'Prop';
-    const entity = new Entity(object3D);
-    entity.solid = !!rec.solid;
-    return entity;
-  }
-
-  // ---------- prefabs / reusable assets ----------
-
-  static PREFAB_KEY = 'tiny3.prefabs';
-
-  listPrefabs() {
-    try {
-      const raw = localStorage.getItem(ObjectEditor.PREFAB_KEY);
-      return raw ? Object.keys(JSON.parse(raw)) : [];
-    } catch (err) {
-      console.warn('[Tiny3] failed to list prefabs', err);
-      return [];
-    }
-  }
-
-  saveAsPrefab(name) {
-    const target = this._primarySelection();
-    if (!target) return false;
-    const rec = this._serializeForPrefab(target);
-    try {
-      const raw = localStorage.getItem(ObjectEditor.PREFAB_KEY) || '{}';
-      const store = JSON.parse(raw);
-      store[name] = rec;
-      localStorage.setItem(ObjectEditor.PREFAB_KEY, JSON.stringify(store));
-      return true;
-    } catch (err) {
-      console.warn('[Tiny3] failed to save prefab', err);
-      return false;
-    }
-  }
-
-  deletePrefab(name) {
-    try {
-      const raw = localStorage.getItem(ObjectEditor.PREFAB_KEY) || '{}';
-      const store = JSON.parse(raw);
-      delete store[name];
-      localStorage.setItem(ObjectEditor.PREFAB_KEY, JSON.stringify(store));
-      return true;
-    } catch (err) {
-      console.warn('[Tiny3] failed to delete prefab', err);
-      return false;
-    }
-  }
-
-  instantiatePrefab(name) {
-    try {
-      const raw = localStorage.getItem(ObjectEditor.PREFAB_KEY) || '{}';
-      const store = JSON.parse(raw);
-      const rec = store[name];
-      if (!rec) return null;
-      const entity = this._deserializeFromPrefab(rec);
-      if (!entity) return null;
-      this.engine.add(entity);
-      this.register(entity);
-      this._recordAddRemove(entity, true);
+  /**
+   * Remove one entity from the scene and the hierarchy. `record: false` skips
+   * undo — for wiping a whole scene. ("New scene" called this before it
+   * existed, so the New button threw on any scene with an object in it.)
+   */
+  removeEntity(entity, { record = true } = {}) {
+    if (!entity) return;
+    if (record) {
       this.select(entity);
-      return entity;
-    } catch (err) {
-      console.warn('[Tiny3] failed to instantiate prefab', err);
-      return null;
+      this.deleteSelected();
+      return;
     }
+    if (this.selected === entity || this.selectedSet.has(entity)) this.select(null);
+    this._cleanupEntityMedia(entity);
+    if (typeof entity.destroy === 'function') entity.destroy(this.engine);
+    else this.engine.remove(entity);
+    this.unregister(entity);
   }
 
-  _serializeForPrefab(entity) {
-    const o = entity.object3D;
-    const rec = {
-      name: o.name,
-      position: { x: 0, y: o.position.y, z: 0 },
-      rotation: { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z },
-      scale: { x: o.scale.x, y: o.scale.y, z: o.scale.z },
-      solid: entity.solid,
-      kind: o.userData.kind,
-    };
-    if (o.isLight) {
-      rec.light = {
-        type: o.isDirectionalLight ? 'directional' : o.isPointLight ? 'point' : o.isSpotLight ? 'spot' : 'ambient',
-        color: '#' + o.color.getHexString(),
-        intensity: o.intensity,
-        castShadow: !!o.castShadow,
-      };
-      if (o.distance !== undefined) rec.light.distance = o.distance;
-      if (o.angle !== undefined) rec.light.angle = o.angle;
-      if (o.penumbra !== undefined) rec.light.penumbra = o.penumbra;
-    }
-    const mesh = this._firstMesh(o);
-    if (mesh && mesh.material && mesh.material.isMeshStandardMaterial) {
-      const m = mesh.material;
-      rec.material = {
-        color: '#' + m.color.getHexString(),
-        metalness: m.metalness,
-        roughness: m.roughness,
-        opacity: m.opacity,
-        wireframe: !!m.wireframe,
-      };
-    }
-    if (o.userData.assetUrl) rec.assetUrl = o.userData.assetUrl;
-    if (o.geometry && !rec.assetUrl) {
-      const kind = primitiveKind(o.geometry);
-      if (kind) rec.primitive = kind;
-    }
-    if (entity.behavior) rec.behavior = entity.behavior;
-    if (entity.rigidBody) {
-      rec.rigidBody = {
-        type: entity.rigidBody.type,
-        mass: entity.rigidBody.mass,
-        restitution: entity.rigidBody.restitution,
-        friction: entity.rigidBody.friction,
-      };
-    }
-    return rec;
-  }
-
-  _deserializeFromPrefab(rec) {
-    // Reuse clipboard deserializer but reset X/Z position so it spawns at origin plane
-    const entity = this._deserializeFromClipboard(rec);
-    if (!entity) return null;
-    entity.object3D.position.set(0, rec.position.y, 0);
-    entity.object3D.name = rec.name;
-    if (rec.behavior) {
-      entity.behavior = rec.behavior;
-      this.engine.addBehavior(entity, rec.behavior);
-    }
-    if (rec.rigidBody) {
-      entity.rigidBody = new RigidBody(rec.rigidBody);
-      this.engine.physics.register(entity);
-    }
-    return entity;
-  }
-
-  // ---------- property copy / paste ----------
-
-  copyProperties() {
-    const target = this._primarySelection();
-    if (!target) return false;
-    this._propsClipboard = this._snapshotProperties(target);
-    return true;
-  }
-
-  pasteProperties() {
-    if (!this._propsClipboard) return false;
-    const targets = this.selectedSet.size > 0 ? [...this.selectedSet] : (this.selected ? [this.selected] : []);
-    if (!targets.length) return false;
-    const self = this;
-    const befores = targets.map((t) => ({ entity: t, props: this._snapshotProperties(t) }));
-    const doApply = (propsList) => {
-      for (const { entity, props } of propsList) {
-        this._applyProperties(entity, props);
-      }
-      this._renderInspector();
-      this._renderHierarchy();
-    };
-    if (this.history) {
-      this.history.push({
-        label: 'paste properties',
-        undo() { doApply(befores.map((b) => ({ entity: b.entity, props: b.props }))); },
-        redo() { doApply(targets.map((t) => ({ entity: t, props: self._propsClipboard }))); },
-      });
-    }
-    doApply(targets.map((t) => ({ entity: t, props: this._propsClipboard })));
-    return true;
-  }
-
-  _snapshotProperties(entity) {
-    const o = entity.object3D;
-    const snap = {
-      position: { x: o.position.x, y: o.position.y, z: o.position.z },
-      rotation: { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z },
-      scale: { x: o.scale.x, y: o.scale.y, z: o.scale.z },
-      solid: entity.solid,
-    };
-    if (o.isLight) {
-      snap.light = {
-        color: '#' + o.color.getHexString(),
-        intensity: o.intensity,
-        castShadow: !!o.castShadow,
-      };
-    }
-    const mesh = this._firstMesh(o);
-    if (mesh && mesh.material && mesh.material.isMeshStandardMaterial) {
-      const m = mesh.material;
-      snap.material = {
-        color: '#' + m.color.getHexString(),
-        metalness: m.metalness,
-        roughness: m.roughness,
-        opacity: m.opacity,
-        wireframe: !!m.wireframe,
-      };
-    }
-    if (entity.rigidBody) {
-      snap.rigidBody = {
-        type: entity.rigidBody.type,
-        mass: entity.rigidBody.mass,
-        restitution: entity.rigidBody.restitution,
-        friction: entity.rigidBody.friction,
-      };
-    }
-    return snap;
-  }
-
-  _applyProperties(entity, props) {
-    const o = entity.object3D;
-    if (props.position) o.position.set(props.position.x, props.position.y, props.position.z);
-    if (props.rotation) o.rotation.set(props.rotation.x, props.rotation.y, props.rotation.z);
-    if (props.scale) o.scale.set(props.scale.x, props.scale.y, props.scale.z);
-    if (props.solid !== undefined) {
-      entity.solid = props.solid;
-      this._updateSolidHelper(entity);
-    }
-    if (props.light && o.isLight) {
-      o.color.set(props.light.color);
-      o.intensity = props.light.intensity;
-      o.castShadow = props.light.castShadow;
-    }
-    const mesh = this._firstMesh(o);
-    if (props.material && mesh && mesh.material && mesh.material.isMeshStandardMaterial) {
-      const m = mesh.material;
-      const p = props.material;
-      m.color.set(p.color);
-      m.metalness = p.metalness;
-      m.roughness = p.roughness;
-      m.opacity = p.opacity;
-      m.wireframe = p.wireframe;
-      m.transparent = p.opacity < 1;
-      m.needsUpdate = true;
-    }
-    if (props.rigidBody && entity.rigidBody) {
-      entity.rigidBody.type = props.rigidBody.type;
-      entity.rigidBody.mass = props.rigidBody.mass;
-      entity.rigidBody.restitution = props.rigidBody.restitution;
-      entity.rigidBody.friction = props.rigidBody.friction;
-      entity.rigidBody.invMass = props.rigidBody.type === 'dynamic' ? 1 / props.rigidBody.mass : 0;
-    }
-    this._helper.setFromObject(o);
-  }
+  /**
+   * Where prefabs were kept before they belonged to the project (see the
+   * migration in game.js). The prefab methods are in ./editor/prefabs.js.
+   */
+  static LEGACY_PREFAB_KEY = 'tiny3.prefabs';
 
   setSnap(type, value) {
     this.snap[type] = value;
@@ -998,1040 +466,53 @@ export class ObjectEditor {
     this.engine.removeBehavior(entity);
   }
 
-  /** Show/hide a red wireframe box around solid entities. */
+  /**
+   * Show/hide a red wireframe box round what blocks the player as a box: a
+   * still (static or kinematic) body that isn't a trigger. Not for a mesh
+   * body — the model itself is its shape, and a box round it would say the
+   * whole of it is solid (a court's open doorway, a room's inside).
+   * Reuses the existing helper — this used to allocate a fresh BoxHelper (and
+   * start a fresh rAF loop) on every frame of a gizmo drag, disposing none of them.
+   */
   _updateSolidHelper(entity) {
-    this._clearSolidHelper(entity);
-    if (!entity.solid) return;
+    if (!entity) return;
+    const body = entity.rigidBody;
+    const box = !!body && !body.isTrigger && body.type !== 'dynamic' && body.shape !== 'mesh';
+    if (!box) { this._clearSolidHelper(entity); return; }
+    const existing = entity.object3D.userData.__solidHelper;
+    if (existing) { existing.update(); return; }
     const helper = new THREE.BoxHelper(entity.object3D, 0xff3333);
     helper.name = '__solidHelper';
     entity.object3D.userData.__solidHelper = helper;
     this.engine.scene.add(helper);
     helper.update();
-    // keep helper in sync while selected/transformed
-    const tick = () => {
-      if (!helper.parent) return;
-      if (entity.solid && entity.object3D.userData.__solidHelper === helper) {
-        helper.update();
-        requestAnimationFrame(tick);
-      } else {
-        this.engine.scene.remove(helper);
-      }
-    };
-    tick();
+  }
+
+  /** Refresh every live solid outline (called once per frame from update()). */
+  _refreshSolidHelpers() {
+    for (const e of this.selectables) {
+      const helper = e.object3D.userData.__solidHelper;
+      if (helper) helper.update();
+    }
   }
 
   _clearSolidHelper(entity) {
-    const helper = entity.object3D.userData.__solidHelper;
-    if (helper) {
-      this.engine.scene.remove(helper);
-      delete entity.object3D.userData.__solidHelper;
-    }
+    const helper = entity?.object3D?.userData?.__solidHelper;
+    if (!helper) return;
+    helper.parent?.remove(helper);
+    helper.geometry?.dispose();
+    helper.material?.dispose();
+    delete entity.object3D.userData.__solidHelper;
   }
 
-  // ---------- hierarchy panel ----------
-
-  _renderHierarchy() {
-    if (!this.listEl) return;
-    this.listEl.innerHTML = '';
-    const roots = this.selectables.filter((e) => !e.parent);
-    for (const root of roots) {
-      this._renderHierarchyNode(root, 0);
-    }
-  }
-
-  _renderHierarchyNode(entity, depth) {
-    const li = document.createElement('li');
-    li.style.paddingLeft = `${12 + depth * 16}px`;
-    if (this.selectedSet.has(entity)) li.classList.add('selected');
-    li.draggable = true;
-    const kind = entity.object3D.userData.kind || entity.constructor.name;
-    const hasChildren = entity.children.length > 0;
-    const collapsed = hasChildren && this._collapsed.has(entity);
-    const toggle = hasChildren
-      ? `<span class="collapse" style="cursor:pointer;width:14px;text-align:center;display:inline-block">${collapsed ? '▶' : '▼'}</span>`
-      : '<span style="width:14px;display:inline-block"></span>';
-    li.innerHTML = `${toggle}<span class="ico">${this._icon(kind)}</span><span class="nm">${this._name(entity)}</span>`;
-
-    // click to select
-    li.addEventListener('click', (e) => {
-      if (e.target.classList.contains('collapse')) {
-        if (this._collapsed.has(entity)) this._collapsed.delete(entity);
-        else this._collapsed.add(entity);
-        this._renderHierarchy();
-        return;
-      }
-      const additive = e.shiftKey;
-      this.select(entity, { additive });
-    });
-
-    // drag to reparent
-    li.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/plain', String(this.selectables.indexOf(entity)));
-      e.dataTransfer.effectAllowed = 'move';
-    });
-    li.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-    });
-    li.addEventListener('drop', (e) => {
-      e.preventDefault();
-      const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-      const from = this.selectables[fromIdx];
-      if (!from || from === entity) return;
-      if (this._isDescendant(entity, from)) return; // can't parent to own child
-      this._setParentWithHistory(from, entity);
-    });
-
-    this.listEl.appendChild(li);
-
-    if (hasChildren && !collapsed) {
-      for (const child of entity.children) {
-        this._renderHierarchyNode(child, depth + 1);
-      }
-    }
-  }
-
-  _isDescendant(ancestor, entity) {
-    let p = entity.parent;
-    while (p) {
-      if (p === ancestor) return true;
-      p = p.parent;
-    }
-    return false;
-  }
-
-  _setParentWithHistory(child, newParent) {
-    const oldParent = child.parent;
-    if (oldParent === newParent) return;
-    const self = this;
-    const doSet = (parent) => {
-      child.setParent(parent, self.engine);
-      self._renderHierarchy();
-      if (self.selected === child) self._renderInspector();
-    };
-    if (this.history) {
-      this.history.push({
-        label: 'reparent',
-        undo() { doSet(oldParent); },
-        redo() { doSet(newParent); },
-      });
-    }
-    doSet(newParent);
-  }
-
-  _icon(kind) {
-    switch (kind) {
-      case 'Player': return '●';
-      case 'Coin': return '◉';
-      case 'Prop': return '■';
-      case 'Light': return '☀';
-      case 'Empty': return '◇';
-      default: return '◆';
-    }
-  }
-
-  _name(entity) {
-    return entity.object3D.name || entity.constructor.name;
-  }
-
-  // ---------- inspector panel ----------
-
-  _renderInspector() {
-    if (!this.inspectorEl) return;
-    const sel = this.selected;
-    if (!sel) {
-      this.inspectorEl.innerHTML = '<div class="empty">Select an object in the scene or hierarchy.</div>';
-      return;
-    }
-
-    const o = sel.object3D;
-    const isLight = !!o.isLight;
-    const mesh = this._firstMesh(o);
-
-    this.inspectorEl.innerHTML = `
-      <div class="body">
-        <input class="obj-name" id="insp-name" value="${this._name(sel)}" spellcheck="false" />
-        <div class="prop-row"><label>Parent</label><select id="insp-parent">${this._parentOptions(sel)}</select></div>
-        ${this._vecRow('pos', 'Position', o.position)}
-        ${this._vecRow('rot', 'Rotation°', { x: o.rotation.x * DEG, y: o.rotation.y * DEG, z: o.rotation.z * DEG })}
-        ${isLight ? '' : this._vecRow('scl', 'Scale', o.scale)}
-        <label class="check-row"><input type="checkbox" id="insp-solid" ${sel.solid ? 'checked' : ''}/> Solid (blocks player)</label>
-        ${this._physicsSection(sel)}
-        ${isLight ? this._lightSection(o) : ''}
-        ${mesh ? this._materialSection(mesh) : ''}
-        ${this._behaviorSection(sel)}
-        ${this._animationSection(sel)}
-        ${this._audioSection(sel)}
-        <div class="insp-row">
-          <button class="tbtn" id="insp-dup">Duplicate</button>
-          <button class="tbtn danger" id="insp-del">Delete</button>
-        </div>
-        <div class="insp-row" style="margin-top:6px">
-          <button class="tbtn" id="insp-copy-props" title="Copy material/transform/light/etc properties">Copy props</button>
-          <button class="tbtn" id="insp-paste-props" title="Paste copied properties onto selection">Paste props</button>
-        </div>
-      </div>`;
-
-    // name (record on change/blur)
-    const nameField = this.inspectorEl.querySelector('#insp-name');
-    let nameBefore = o.name;
-    nameField.addEventListener('focus', () => { nameBefore = o.name; });
-    nameField.addEventListener('input', (e) => {
-      o.name = e.target.value;
-      this._renderHierarchy();
-    });
-    nameField.addEventListener('change', () => {
-      this._recordValue(o, 'name', nameBefore, o.name, (v) => { o.name = v; this._renderHierarchy(); }, 'rename');
-      nameBefore = o.name;
-    });
-    nameField.addEventListener('blur', () => {
-      if (o.name !== nameBefore) {
-        this._recordValue(o, 'name', nameBefore, o.name, (v) => { o.name = v; this._renderHierarchy(); }, 'rename');
-        nameBefore = o.name;
-      }
-    });
-
-    // parent dropdown
-    const parentSel = this.inspectorEl.querySelector('#insp-parent');
-    if (parentSel) {
-      let parentBefore = sel.parent;
-      parentSel.addEventListener('change', () => {
-        const idx = parseInt(parentSel.value, 10);
-        const newParent = Number.isInteger(idx) ? this.selectables[idx] : null;
-        if (!newParent || newParent === sel || this._isDescendant(sel, newParent)) return;
-        this._setParentWithHistory(sel, newParent);
-        parentBefore = newParent;
-      });
-    }
-
-    // numeric vectors — record on change/blur per axis
-    const vecs = [
-      ['pos', o.position, 1],
-      ['rot', o.rotation, RAD],
-    ];
-    if (!isLight) vecs.push(['scl', o.scale, 1]);
-    for (const [key, target, conv] of vecs) {
-      for (const axis of ['x', 'y', 'z']) {
-        const field = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
-        let axisBefore = target[axis];
-        let lastInput = target[axis] / conv;
-        field.addEventListener('focus', () => {
-          axisBefore = target[axis];
-          lastInput = target[axis] / conv;
-        });
-        field.addEventListener('input', () => {
-          const raw = field.value;
-          if (raw === '' || raw === '-' || raw === '.') return; // allow partial typing
-          const v = parseFloat(raw);
-          if (Number.isFinite(v)) {
-            lastInput = v;
-            target[axis] = v * conv;
-            this._helper.setFromObject(o);
-            this.gizmo.updateMatrixWorld?.();
-          }
-        });
-        const commitAxis = () => {
-          const after = target.clone();
-          const before = target.clone();
-          before[axis] = axisBefore;
-          if (!before.equals(after)) {
-            this._recordVector(target, before, after, `${key}.${axis}`);
-          }
-          axisBefore = target[axis];
-        };
-        field.addEventListener('change', commitAxis);
-        field.addEventListener('blur', commitAxis);
-      }
-    }
-
-    const solidCheck = this.inspectorEl.querySelector('#insp-solid');
-    if (solidCheck) {
-      let solidBefore = !!sel.solid;
-      solidCheck.addEventListener('change', () => {
-        const after = solidCheck.checked;
-        this._recordValue(sel, 'solid', solidBefore, after, (v) => {
-          sel.solid = v;
-          this._updateSolidHelper(sel);
-        }, 'solid');
-        sel.solid = after;
-        this._updateSolidHelper(sel);
-        solidBefore = after;
-      });
-    }
-    this._updateSolidHelper(sel);
-
-    if (isLight) this._wireLightSection(o);
-    if (mesh) this._wireMaterialSection(mesh);
-    this._wirePhysicsSection(sel);
-    this._wireBehaviorSection(sel);
-    this._wireAnimationSection(sel);
-    this._wireAudioSection(sel);
-
-    this.inspectorEl.querySelector('#insp-del').addEventListener('click', () => this.deleteSelected());
-    this.inspectorEl.querySelector('#insp-dup').addEventListener('click', () => this.duplicateSelection());
-    this.inspectorEl.querySelector('#insp-copy-props').addEventListener('click', () => this.copyProperties());
-    this.inspectorEl.querySelector('#insp-paste-props').addEventListener('click', () => this.pasteProperties());
-  }
-
-  _vecRow(key, label, v) {
-    const f = (n) => {
-      // keep enough precision for precise editing; trim trailing zeros
-      const s = n.toFixed(3);
-      return s.replace(/\.?0+$/, '');
-    };
-    return `
-      <div class="vec-row">
-        <label>${label}</label>
-        <input id="insp-${key}-x" type="number" step="0.001" value="${f(v.x)}" />
-        <input id="insp-${key}-y" type="number" step="0.001" value="${f(v.y)}" />
-        <input id="insp-${key}-z" type="number" step="0.001" value="${f(v.z)}" />
-      </div>`;
-  }
-
-  _parentOptions(sel) {
-    let html = '<option value="">(none / scene root)</option>';
-    for (let i = 0; i < this.selectables.length; i++) {
-      const e = this.selectables[i];
-      if (e === sel) continue;
-      if (this._isDescendant(sel, e)) continue; // can't parent to own descendant
-      const name = this._name(e) || `Object ${i}`;
-      const selected = e === sel.parent ? ' selected' : '';
-      html += `<option value="${i}"${selected}>${name}</option>`;
-    }
-    return html;
-  }
-
-  // ---------- physics ----------
-
-  _physicsSection(entity) {
-    const body = entity.rigidBody;
-    const type = body?.type || 'static';
-    const mass = body?.mass ?? 1;
-    const restitution = body?.restitution ?? 0;
-    const friction = body?.friction ?? 0.5;
-    const hasBody = !!body;
-    return `
-      <h4 class="insp-h">Physics</h4>
-      <label class="check-row"><input type="checkbox" id="insp-rb-enable" ${hasBody ? 'checked' : ''}/> Enable rigid body</label>
-      <div class="prop-row"><label>Type</label>
-        <select id="insp-rb-type" ${hasBody ? '' : 'disabled'}>
-          ${BODY_TYPES.map((t) => `<option value="${t}" ${type === t ? 'selected' : ''}>${t}</option>`).join('')}
-        </select></div>
-      <div class="prop-row"><label>Mass</label>
-        <input type="number" id="insp-rb-mass" value="${mass}" step="0.1" ${hasBody ? '' : 'disabled'} /></div>
-      <div class="prop-row"><label>Restitution</label>
-        <input type="range" id="insp-rb-rest" min="0" max="1" step="0.05" value="${restitution}" ${hasBody ? '' : 'disabled'} />
-        <span class="val" id="insp-rb-rest-v">${restitution.toFixed(2)}</span></div>
-      <div class="prop-row"><label>Friction</label>
-        <input type="range" id="insp-rb-fric" min="0" max="1" step="0.05" value="${friction}" ${hasBody ? '' : 'disabled'} />
-        <span class="val" id="insp-rb-fric-v">${friction.toFixed(2)}</span></div>`;
-  }
-
-  _wirePhysicsSection(entity) {
-    const q = (s) => this.inspectorEl.querySelector(s);
-    const enable = q('#insp-rb-enable');
-    const typeSel = q('#insp-rb-type');
-    const massIn = q('#insp-rb-mass');
-    const rest = q('#insp-rb-rest');
-    const fric = q('#insp-rb-fric');
-
-    const updateUI = (enabled) => {
-      typeSel.disabled = !enabled;
-      massIn.disabled = !enabled;
-      rest.disabled = !enabled;
-      fric.disabled = !enabled;
-    };
-
-    enable.addEventListener('change', () => {
-      const after = enable.checked;
-      this._recordValue(entity, 'rigidBody', entity.rigidBody, after ? new RigidBody() : null, (v) => {
-        entity.rigidBody = v;
-        if (v) this.engine.physics.register(entity);
-        else this.engine.physics.unregister(entity);
-        this._renderInspector();
-      }, 'rigid body');
-      if (after) {
-        entity.rigidBody = new RigidBody();
-        this.engine.physics.register(entity);
-      } else {
-        this.engine.physics.unregister(entity);
-        entity.rigidBody = null;
-      }
-      updateUI(after);
-    });
-
-    typeSel.addEventListener('change', () => {
-      if (!entity.rigidBody) return;
-      const before = entity.rigidBody.type;
-      const after = typeSel.value;
-      this._recordValue(entity.rigidBody, 'type', before, after, (v) => {
-        entity.rigidBody.type = v;
-        entity.rigidBody.invMass = v === 'dynamic' ? 1 / entity.rigidBody.mass : 0;
-      }, 'physics type');
-      entity.rigidBody.type = after;
-      entity.rigidBody.invMass = after === 'dynamic' ? 1 / entity.rigidBody.mass : 0;
-    });
-
-    let massBefore = entity.rigidBody?.mass ?? 1;
-    massIn.addEventListener('input', () => {
-      if (!entity.rigidBody) return;
-      const v = Math.max(0.001, parseFloat(massIn.value) || 0.001);
-      entity.rigidBody.mass = v;
-      entity.rigidBody.invMass = entity.rigidBody.type === 'dynamic' ? 1 / v : 0;
-    });
-    massIn.addEventListener('change', () => {
-      if (!entity.rigidBody) return;
-      const after = entity.rigidBody.mass;
-      this._recordValue(entity.rigidBody, 'mass', massBefore, after, (v) => {
-        entity.rigidBody.mass = v;
-        entity.rigidBody.invMass = entity.rigidBody.type === 'dynamic' ? 1 / v : 0;
-        massIn.value = v;
-      }, 'physics mass');
-      massBefore = after;
-    });
-
-    let restBefore = entity.rigidBody?.restitution ?? 0;
-    rest.addEventListener('input', () => {
-      if (!entity.rigidBody) return;
-      entity.rigidBody.restitution = parseFloat(rest.value);
-      q('#insp-rb-rest-v').textContent = entity.rigidBody.restitution.toFixed(2);
-    });
-    rest.addEventListener('change', () => {
-      if (!entity.rigidBody) return;
-      const after = entity.rigidBody.restitution;
-      this._recordValue(entity.rigidBody, 'restitution', restBefore, after, (v) => {
-        entity.rigidBody.restitution = v;
-        rest.value = v;
-        q('#insp-rb-rest-v').textContent = v.toFixed(2);
-      }, 'physics restitution');
-      restBefore = after;
-    });
-
-    let fricBefore = entity.rigidBody?.friction ?? 0.5;
-    fric.addEventListener('input', () => {
-      if (!entity.rigidBody) return;
-      entity.rigidBody.friction = parseFloat(fric.value);
-      q('#insp-rb-fric-v').textContent = entity.rigidBody.friction.toFixed(2);
-    });
-    fric.addEventListener('change', () => {
-      if (!entity.rigidBody) return;
-      const after = entity.rigidBody.friction;
-      this._recordValue(entity.rigidBody, 'friction', fricBefore, after, (v) => {
-        entity.rigidBody.friction = v;
-        fric.value = v;
-        q('#insp-rb-fric-v').textContent = v.toFixed(2);
-      }, 'physics friction');
-      fricBefore = after;
-    });
-  }
-
-  // ---------- behavior / scripting ----------
-
-  _behaviorSection(entity) {
-    const code = entity.behavior || '';
-    return `
-      <h4 class="insp-h">Behavior</h4>
-      <textarea id="insp-behavior" spellcheck="false" placeholder="// runs every frame in Play mode\n// this.entity, this.engine, this.delta, this.time, this.keys, this.fire()">${this._escapeHtml(code)}</textarea>
-      <div class="insp-row">
-        <button class="tbtn" id="insp-behavior-apply">Apply</button>
-        <button class="tbtn danger" id="insp-behavior-clear">Clear</button>
-      </div>`;
-  }
-
-  _escapeHtml(str) {
-    return str.replace(/\u0026/g, '\u0026amp;').replace(/\u003c/g, '\u0026lt;').replace(/\u003e/g, '\u0026gt;');
-  }
-
-  _wireBehaviorSection(entity) {
-    const q = (s) => this.inspectorEl.querySelector(s);
-    const ta = q('#insp-behavior');
-    let before = entity.behavior || '';
-    const apply = () => {
-      const after = ta.value;
-      this._recordValue(entity, 'behavior', before, after, (v) => {
-        entity.behavior = v || null;
-        ta.value = v || '';
-      }, 'behavior');
-      entity.behavior = after || null;
-      before = after;
-      this.engine.addBehavior(entity, after);
-    };
-    q('#insp-behavior-apply').addEventListener('click', apply);
-    q('#insp-behavior-clear').addEventListener('click', () => {
-      this._recordValue(entity, 'behavior', before, '', (v) => {
-        entity.behavior = v || null;
-        ta.value = v || '';
-      }, 'behavior');
-      entity.behavior = null;
-      before = '';
-      this.engine.removeBehavior(entity);
-    });
-  }
-
-  // ---------- lights ----------
-
-  _lightSection(light) {
-    const shadowRow = light.shadow
-      ? `<label class="check-row"><input type="checkbox" id="insp-shadow" ${light.castShadow ? 'checked' : ''}/> Cast shadows</label>`
-      : '';
-    return `
-      <h4 class="insp-h">Light</h4>
-      <div class="prop-row"><label>Color</label>
-        <input type="color" id="insp-lcolor" value="#${light.color.getHexString()}" /></div>
-      <div class="prop-row"><label>Intensity</label>
-        <input type="range" id="insp-lintensity" min="0" max="8" step="0.05" value="${light.intensity}" />
-        <span class="val" id="insp-lintensity-v">${light.intensity.toFixed(2)}</span></div>
-      ${shadowRow}`;
-  }
-
-  _wireLightSection(light) {
-    const q = (s) => this.inspectorEl.querySelector(s);
-
-    // color
-    const colorBefore = '#' + light.color.getHexString();
-    let colorCurrent = colorBefore;
-    q('#insp-lcolor').addEventListener('input', (e) => {
-      light.color.set(e.target.value);
-      colorCurrent = e.target.value;
-    });
-    q('#insp-lcolor').addEventListener('change', () => {
-      this._recordColor(light, 'color', colorBefore, colorCurrent, 'light color');
-    });
-
-    // intensity
-    const slider = q('#insp-lintensity');
-    let intensityBefore = light.intensity;
-    slider.addEventListener('input', () => {
-      light.intensity = parseFloat(slider.value);
-      q('#insp-lintensity-v').textContent = light.intensity.toFixed(2);
-    });
-    slider.addEventListener('change', () => {
-      this._recordValue(light, 'intensity', intensityBefore, light.intensity, (v) => {
-        light.intensity = v;
-        q('#insp-lintensity').value = v;
-        q('#insp-lintensity-v').textContent = v.toFixed(2);
-      }, 'light intensity');
-      intensityBefore = light.intensity;
-    });
-
-    // cast shadows
-    const shadow = q('#insp-shadow');
-    if (shadow) {
-      let shadowBefore = !!light.castShadow;
-      shadow.addEventListener('change', () => {
-        const after = shadow.checked;
-        this._recordValue(light, 'castShadow', shadowBefore, after, (v) => {
-          light.castShadow = v;
-          shadow.checked = v;
-        }, 'shadows');
-        light.castShadow = after;
-        shadowBefore = after;
-      });
-    }
-  }
-
-  // ---------- materials & textures ----------
-
-  _firstMesh(root) {
-    if (root.isMesh) return root;
-    let found = null;
-    root.traverse?.((n) => { if (!found && n.isMesh) found = n; });
-    return found;
-  }
-
-  _materialSection(mesh) {
-    const m = mesh.material;
-    if (!m || !m.isMeshStandardMaterial) {
-      return '<h4 class="insp-h">Material</h4><div class="empty">Non-standard material — edit in code.</div>';
-    }
-    const hasTex = !!m.map;
-    return `
-      <h4 class="insp-h">Material</h4>
-      <div class="prop-row"><label>Color</label>
-        <input type="color" id="insp-mcolor" value="#${m.color.getHexString()}" /></div>
-      <div class="prop-row"><label>Metalness</label>
-        <input type="range" id="insp-metal" min="0" max="1" step="0.01" value="${m.metalness}" />
-        <span class="val" id="insp-metal-v">${m.metalness.toFixed(2)}</span></div>
-      <div class="prop-row"><label>Roughness</label>
-        <input type="range" id="insp-rough" min="0" max="1" step="0.01" value="${m.roughness}" />
-        <span class="val" id="insp-rough-v">${m.roughness.toFixed(2)}</span></div>
-      <div class="prop-row"><label>Opacity</label>
-        <input type="range" id="insp-opacity" min="0" max="1" step="0.01" value="${m.opacity}" />
-        <span class="val" id="insp-opacity-v">${m.opacity.toFixed(2)}</span></div>
-      <label class="check-row"><input type="checkbox" id="insp-wire" ${m.wireframe ? 'checked' : ''}/> Wireframe</label>
-      <h4 class="insp-h">Texture</h4>
-      <div class="prop-row"><span class="val" id="insp-texname">${hasTex ? (m.map.name || 'custom') : 'none'}</span></div>
-      <div class="insp-row" style="margin-top:4px">
-        <button class="tbtn" id="insp-tex-load">Load…</button>
-        <button class="tbtn" id="insp-tex-clear" ${hasTex ? '' : 'disabled'}>Clear</button>
-      </div>`;
-  }
-
-  _wireMaterialSection(mesh) {
-    const m = mesh.material;
-    if (!m || !m.isMeshStandardMaterial) return;
-    const q = (s) => this.inspectorEl.querySelector(s);
-
-    // color
-    const mcolorBefore = '#' + m.color.getHexString();
-    let mcolorCurrent = mcolorBefore;
-    q('#insp-mcolor').addEventListener('input', (e) => {
-      m.color.set(e.target.value);
-      mcolorCurrent = e.target.value;
-    });
-    q('#insp-mcolor').addEventListener('change', () => {
-      this._recordColor(m, 'color', mcolorBefore, mcolorCurrent, 'material color');
-    });
-
-    // numeric sliders (record on change)
-    const slider = (id, prop, apply, label) => {
-      const el = q(`#insp-${id}`);
-      let before = m[prop];
-      el.addEventListener('input', () => {
-        const v = parseFloat(el.value);
-        apply(v);
-        q(`#insp-${id}-v`).textContent = v.toFixed(2);
-      });
-      el.addEventListener('change', () => {
-        const after = m[prop];
-        this._recordValue(m, prop, before, after, (v) => {
-          apply(v);
-          el.value = v;
-          q(`#insp-${id}-v`).textContent = v.toFixed(2);
-        }, label);
-        before = after;
-      });
-    };
-    slider('metal', 'metalness', (v) => { m.metalness = v; }, 'metalness');
-    slider('rough', 'roughness', (v) => { m.roughness = v; }, 'roughness');
-    slider('opacity', 'opacity', (v) => {
-      m.opacity = v;
-      m.transparent = v < 1;
-      m.needsUpdate = true;
-    }, 'opacity');
-
-    // wireframe
-    const wireBefore = !!m.wireframe;
-    q('#insp-wire').addEventListener('change', (e) => {
-      const after = e.target.checked;
-      this._recordValue(m, 'wireframe', wireBefore, after, (v) => {
-        m.wireframe = v;
-        e.target.checked = v;
-      }, 'wireframe');
-      m.wireframe = after;
-    });
-
-    // texture load
-    q('#insp-tex-load').addEventListener('click', () => {
-      const picker = document.createElement('input');
-      picker.type = 'file';
-      picker.accept = 'image/*';
-      picker.addEventListener('change', () => {
-        const file = picker.files?.[0];
-        if (!file) return;
-        const url = URL.createObjectURL(file);
-        this._texLoader.load(url, (tex) => {
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.name = file.name;
-          const oldMap = m.map;
-          this._recordMap(mesh, oldMap, tex, 'load texture');
-          if (m.map && m.map !== oldMap) m.map.dispose();
-          m.map = tex;
-          m.needsUpdate = true;
-          URL.revokeObjectURL(url);
-          q('#insp-texname').textContent = file.name;
-          q('#insp-tex-clear').disabled = false;
-        });
-      });
-      picker.click();
-    });
-
-    // texture clear
-    q('#insp-tex-clear').addEventListener('click', () => {
-      if (m.map) {
-        const oldMap = m.map;
-        this._recordMap(mesh, oldMap, null, 'clear texture');
-        m.map.dispose();
-        m.map = null;
-        m.needsUpdate = true;
-      }
-      q('#insp-texname').textContent = 'none';
-      q('#insp-tex-clear').disabled = true;
-    });
-  }
-
-  // ---------- animation ----------
-
-  /** Get (or lazily create) the mixer record for an entity. */
-  _mixerFor(entity) {
-    let rec = this.engine.mixers.find((m) => m.root === entity.object3D);
-    if (!rec) {
-      const clips = entity.object3D.userData.animations || [];
-      rec = {
-        root: entity.object3D,
-        mixer: new THREE.AnimationMixer(entity.object3D),
-        clips,
-        actions: {},
-        current: null,
-        speed: 1,
-        loop: true,
-      };
-      this.engine.mixers.push(rec);
-    }
-    return rec;
-  }
-
-  _animationSection(entity) {
-    const clips = entity.object3D.userData.animations || [];
-    if (!clips.length) return '';
-    const rec = this.engine.mixers.find((m) => m.root === entity.object3D);
-    const cur = rec?.current ?? '';
-    const opts = ['<option value="">(none)</option>']
-      .concat(clips.map((c, i) =>
-        `<option value="${i}" ${String(i) === String(cur) ? 'selected' : ''}>${c.name || 'clip ' + i}</option>`))
-      .join('');
-    const playing = rec?.current !== null && rec?.current !== undefined && rec.actions[rec.current]?.isRunning();
-    return `
-      <h4 class="insp-h">Animation</h4>
-      <div class="prop-row"><label>Clip</label><select id="insp-anim">${opts}</select></div>
-      <div class="insp-row" style="margin-top:4px; margin-bottom:8px">
-        <button class="tbtn" id="insp-anim-play">${playing ? '⏸ Pause' : '▶ Play'}</button>
-        <button class="tbtn" id="insp-anim-stop">⏹ Stop</button>
-      </div>
-      <div class="prop-row"><label>Speed</label>
-        <input type="range" id="insp-anim-speed" min="0" max="3" step="0.05" value="${rec?.speed ?? 1}" />
-        <span class="val" id="insp-anim-speed-v">${(rec?.speed ?? 1).toFixed(2)}</span></div>
-      <label class="check-row"><input type="checkbox" id="insp-anim-loop" ${rec?.loop !== false ? 'checked' : ''}/> Loop</label>
-      <label class="check-row"><input type="checkbox" id="insp-anim-auto" ${rec?.autoplay ? 'checked' : ''}/> Autoplay</label>`;
-  }
-
-  _wireAnimationSection(entity) {
-    const sel = this.inspectorEl.querySelector('#insp-anim');
-    if (!sel) return; // no animations on this object
-    const rec = this._mixerFor(entity);
-    const q = (s) => this.inspectorEl.querySelector(s);
-
-    const play = (idx, fromStart = true) => {
-      // stop current
-      if (rec.current !== null && rec.actions[rec.current]) {
-        rec.actions[rec.current].fadeOut(0.15);
-      }
-      if (idx === '' || idx === null) { rec.current = null; this._renderInspector(); return; }
-      const i = Number(idx);
-      let action = rec.actions[i];
-      if (!action) {
-        action = rec.mixer.clipAction(rec.clips[i]);
-        rec.actions[i] = action;
-      }
-      if (fromStart) action.reset();
-      action.setLoop(rec.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
-      action.clampWhenFinished = !rec.loop;
-      action.fadeIn(0.15).play();
-      rec.current = i;
-      this._renderInspector();
-    };
-
-    const pause = () => {
-      const a = rec.current !== null ? rec.actions[rec.current] : null;
-      if (a) a.paused ? a.play() : a.stop(); // toggle
-      this._renderInspector();
-    };
-
-    const stop = () => {
-      if (rec.current !== null && rec.actions[rec.current]) {
-        rec.actions[rec.current].stop();
-      }
-      rec.current = null;
-      this._renderInspector();
-    };
-
-    sel.addEventListener('change', () => play(sel.value));
-
-    q('#insp-anim-play').addEventListener('click', () => {
-      if (rec.current !== null && rec.actions[rec.current]?.isRunning()) {
-        rec.actions[rec.current].paused = !rec.actions[rec.current].paused;
-      } else {
-        play(sel.value || 0);
-      }
-      this._renderInspector();
-    });
-
-    q('#insp-anim-stop').addEventListener('click', stop);
-
-    const speed = q('#insp-anim-speed');
-    speed.addEventListener('input', () => {
-      rec.speed = parseFloat(speed.value);
-      q('#insp-anim-speed-v').textContent = rec.speed.toFixed(2);
-    });
-
-    q('#insp-anim-loop').addEventListener('change', (e) => {
-      rec.loop = e.target.checked;
-      const a = rec.current !== null ? rec.actions[rec.current] : null;
-      if (a) {
-        a.setLoop(rec.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
-        a.clampWhenFinished = !rec.loop;
-      }
-    });
-
-    q('#insp-anim-auto').addEventListener('change', (e) => {
-      rec.autoplay = e.target.checked;
-    });
-
-    // if autoplay is set and nothing is playing, start the first clip
-    if (rec.autoplay && rec.current === null && rec.clips.length) {
-      play(0);
-    }
-  }
-
-  // ---------- audio (multiple sounds per entity) ----------
-
-  _audioSection(entity) {
-    const list = this.engine.sounds.filter((s) => s.entity === entity);
-    let html = '<h4 class="insp-h">Audio</h4>';
-    if (!list.length) {
-      html += '<div class="empty">No sounds attached.</div>';
-    }
-    for (let i = 0; i < list.length; i++) {
-      const r = list[i];
-      html += `
-        <div class="aud-card" data-idx="${i}" style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin-bottom:8px;">
-          <div class="prop-row" style="grid-template-columns: 1fr auto; gap:6px; margin-bottom:4px;">
-            <input class="obj-name" style="margin:0" id="insp-aud-name-${i}" value="${r.name}" spellcheck="false" />
-            <button class="tbtn danger" data-aud="del-${i}" style="padding:2px 7px; font-size:12px">×</button>
-          </div>
-          <div class="prop-row"><label>Type</label>
-            <select id="insp-aud-type-${i}">
-              <option value="positional" ${r.type === 'positional' ? 'selected' : ''}>Positional</option>
-              <option value="ambient" ${r.type === 'ambient' ? 'selected' : ''}>Ambient</option>
-              <option value="global" ${r.type === 'global' ? 'selected' : ''}>Global</option>
-            </select>
-          </div>
-          <div class="prop-row"><label>Trigger</label>
-            <select id="insp-aud-trig-${i}">
-              <option value="" ${!r.trigger ? 'selected' : ''}>— none / always —</option>
-              <option value="fire" ${r.trigger === 'fire' ? 'selected' : ''}>Fire action</option>
-              <option value="jump" ${r.trigger === 'jump' ? 'selected' : ''}>Jump action</option>
-              <option value="spawn" ${r.trigger === 'spawn' ? 'selected' : ''}>On spawn</option>
-            </select>
-          </div>
-          <div class="insp-row" style="margin-top:4px">
-            <button class="tbtn" data-aud="play-${i}">${r.audio.isPlaying ? '⏸ Stop' : '▶ Play'}</button>
-            <button class="tbtn" data-aud="clr-${i}">Clear</button>
-          </div>
-          <div class="prop-row"><label>Volume</label>
-            <input type="range" id="insp-aud-vol-${i}" min="0" max="1" step="0.01" value="${r.volume}" />
-            <span class="val" id="insp-aud-vol-v-${i}">${r.volume.toFixed(2)}</span></div>
-          <div class="prop-row"><label>Dist</label>
-            <input type="range" id="insp-aud-dist-${i}" min="1" max="50" step="1" value="${r.refDistance}" />
-            <span class="val" id="insp-aud-dist-v-${i}">${r.refDistance}</span></div>
-          <label class="check-row"><input type="checkbox" id="insp-aud-loop-${i}" ${r.loop ? 'checked' : ''}/> Loop</label>
-          <label class="check-row"><input type="checkbox" id="insp-aud-auto-${i}" ${r.autoplay ? 'checked' : ''}/> Autoplay</label>
-        </div>`;
-    }
-    html += `
-      <div class="insp-row" style="margin-top:8px">
-        <button class="tbtn" id="insp-aud-add">＋ Add sound</button>
-      </div>`;
-    return html;
-  }
-
-  _wireAudioSection(entity) {
-    const q = (s) => this.inspectorEl.querySelector(s);
-    const list = () => this.engine.sounds.filter((s) => s.entity === entity);
-
-    // Add a new sound slot (file picker -> create record)
-    q('#insp-aud-add').addEventListener('click', () => {
-      const picker = document.createElement('input');
-      picker.type = 'file';
-      picker.accept = 'audio/*';
-      picker.addEventListener('change', () => {
-        const file = picker.files?.[0];
-        if (!file) return;
-        const url = URL.createObjectURL(file);
-        this._audioLoader.load(url, (buffer) => {
-          URL.revokeObjectURL(url);
-          this.engine.addSound(entity, buffer, { name: file.name, type: 'positional' });
-          this._renderInspector();
-        });
-      });
-      picker.click();
-    });
-
-    // per-card wiring
-    list().forEach((r, i) => {
-      // name
-      const nameEl = q(`#insp-aud-name-${i}`);
-      let audNameBefore = r.name;
-      nameEl.addEventListener('focus', () => { audNameBefore = r.name; });
-      nameEl.addEventListener('input', (e) => { r.name = e.target.value; });
-      nameEl.addEventListener('change', () => {
-        this._recordSound(r, 'name', audNameBefore, r.name, (v) => { r.name = v; }, 'sound name');
-        audNameBefore = r.name;
-      });
-
-      // type
-      const typeBefore = r.type;
-      q(`#insp-aud-type-${i}`).addEventListener('change', (e) => {
-        const after = e.target.value;
-        this._recordSound(r, 'type', typeBefore, after, (v) => {
-          this._changeSoundType(r, v);
-          this._renderInspector();
-        }, 'sound type');
-        this._changeSoundType(r, after);
-      });
-
-      // trigger
-      const trigBefore = r.trigger || '';
-      q(`#insp-aud-trig-${i}`).addEventListener('change', (e) => {
-        const after = e.target.value || null;
-        this._recordSound(r, 'trigger', trigBefore, after, (v) => { r.trigger = v || null; }, 'sound trigger');
-        r.trigger = after;
-      });
-
-      // play/stop (not undoable — it's a preview)
-      q(`[data-aud="play-${i}"]`).addEventListener('click', () => {
-        this.engine.unlockAudio();
-        if (r.audio.isPlaying) r.audio.stop(); else r.audio.play();
-        this._renderInspector();
-      });
-
-      // clear this sound
-      q(`[data-aud="clr-${i}"]`).addEventListener('click', () => {
-        this.engine.removeSound(r);
-        this._renderInspector();
-      });
-
-      // delete this sound
-      q(`[data-aud="del-${i}"]`).addEventListener('click', () => {
-        this.engine.removeSound(r);
-        this._renderInspector();
-      });
-
-      // volume
-      const vol = q(`#insp-aud-vol-${i}`);
-      let volBefore = r.volume;
-      vol.addEventListener('input', () => {
-        r.volume = parseFloat(vol.value);
-        r.audio.setVolume(r.volume);
-        q(`#insp-aud-vol-v-${i}`).textContent = r.volume.toFixed(2);
-      });
-      vol.addEventListener('change', () => {
-        this._recordSound(r, 'volume', volBefore, r.volume, (v) => {
-          r.volume = v;
-          r.audio.setVolume(v);
-          q(`#insp-aud-vol-${i}`).value = v;
-          q(`#insp-aud-vol-v-${i}`).textContent = v.toFixed(2);
-        }, 'sound volume');
-        volBefore = r.volume;
-      });
-
-      // distance
-      const dist = q(`#insp-aud-dist-${i}`);
-      let distBefore = r.refDistance;
-      dist.addEventListener('input', () => {
-        r.refDistance = parseInt(dist.value, 10);
-        if (r.type === 'positional') r.audio.setRefDistance(r.refDistance);
-        q(`#insp-aud-dist-v-${i}`).textContent = String(r.refDistance);
-      });
-      dist.addEventListener('change', () => {
-        this._recordSound(r, 'refDistance', distBefore, r.refDistance, (v) => {
-          r.refDistance = v;
-          if (r.type === 'positional') r.audio.setRefDistance(v);
-          q(`#insp-aud-dist-${i}`).value = v;
-          q(`#insp-aud-dist-v-${i}`).textContent = String(v);
-        }, 'sound distance');
-        distBefore = r.refDistance;
-      });
-
-      // loop
-      const loopBefore = !!r.loop;
-      q(`#insp-aud-loop-${i}`).addEventListener('change', (e) => {
-        const after = e.target.checked;
-        this._recordSound(r, 'loop', loopBefore, after, (v) => {
-          r.loop = v;
-          r.audio.setLoop(v);
-          e.target.checked = v;
-        }, 'sound loop');
-        r.loop = after;
-        r.audio.setLoop(after);
-      });
-
-      // autoplay
-      const autoBefore = !!r.autoplay;
-      q(`#insp-aud-auto-${i}`).addEventListener('change', (e) => {
-        const after = e.target.checked;
-        this._recordSound(r, 'autoplay', autoBefore, after, (v) => { r.autoplay = v; e.target.checked = v; }, 'sound autoplay');
-        r.autoplay = after;
-      });
-    });
-  }
-
-  _changeSoundType(rec, newType) {
-    const wasPlaying = rec.audio.isPlaying;
-    const currentTime = rec.audio.context.currentTime;
-    if (rec.audio.isPlaying) rec.audio.stop();
-
-    // detach old audio node
-    if (rec.type === 'positional') {
-      rec.entity.object3D.remove(rec.audio);
-    }
-    rec.audio.disconnect?.();
-
-    // build new audio node of the requested type, preserving buffer + settings
-    let audio;
-    if (newType === 'positional') {
-      audio = new THREE.PositionalAudio(this.engine.listener);
-      audio.setRefDistance(rec.refDistance);
-      rec.entity.object3D.add(audio);
-    } else {
-      audio = new THREE.Audio(this.engine.listener);
-    }
-    audio.setBuffer(rec.audio.buffer);
-    audio.setVolume(rec.volume);
-    audio.setLoop(rec.loop);
-    rec.type = newType;
-    rec.audio = audio;
-
-    if (wasPlaying && newType !== 'positional') audio.play(currentTime);
-  }
-
-  _clearSound(entity) {
-    this.engine.clearEntitySounds(entity);
-  }
-
-  /** Refresh inspector numbers without rebuilding the DOM (used while dragging). */
-  _syncInspector() {
-    const sel = this.selected;
-    if (!sel || !this.inspectorEl || this._typingInPanel()) return;
-    const o = sel.object3D;
-    const set = (key, axis, val) => {
-      const el = this.inspectorEl.querySelector(`#insp-${key}-${axis}`);
-      if (el) {
-        // preserve precision to 3 decimals, trimming trailing zeros
-        const s = val.toFixed(3).replace(/\.?0+$/, '');
-        el.value = s;
-      }
-    };
-    for (const a of ['x', 'y', 'z']) {
-      set('pos', a, o.position[a]);
-      set('rot', a, o.rotation[a] * DEG);
-      set('scl', a, o.scale[a]);
-    }
-  }
-
-  _typingInPanel() {
-    const a = document.activeElement;
-    if (!a || (a.tagName !== 'INPUT' && a.tagName !== 'TEXTAREA')) return false;
-    // any text/number field in any editor panel counts
-    return !!a.closest('.panel') && a.type !== 'range' && a.type !== 'checkbox' && a.type !== 'color';
-  }
+  _escapeHtml(str) { return escapeHtml(str); }
 
   _renderStatus() {
     if (!this.statusEl) return;
     const cam = this.engine.cameraRig ? this.engine.cameraRig.mode : 'orbit';
     const count = this.selectedSet.size;
     const sel = count > 1 ? ` · selected: <b>${count} objects</b>`
-      : this.selected ? ` · selected: <b>${this._name(this.selected)}</b>`
+      : this.selected ? ` · selected: <b>${escapeHtml(this._name(this.selected))}</b>`
       : '';
     const snap = [];
     if (this.snap.translate > 0) snap.push(`grid ${this.snap.translate}`);
@@ -2039,21 +520,28 @@ export class ObjectEditor {
     if (this.snap.scale > 0) snap.push(`scale ${this.snap.scale}`);
     const sensText = this.gizmoSensitivity !== 1 ? ` · sens ${this.gizmoSensitivity}` : '';
     const snapText = snap.length ? ` · snap: ${snap.join(', ')}` : '';
-    this.statusEl.innerHTML = `${this.statusPrefix}${cam} cam · ${this._gizmoMode} gizmo${sel}${sensText}${snapText}`;
+    const html = `${this.statusPrefix}${cam} cam · ${this._gizmoMode} gizmo${sel}${sensText}${snapText}`;
+    // called every frame: only touch the page when it says something new
+    if (html !== this._statusHtml) {
+      this._statusHtml = html;
+      this.statusEl.innerHTML = html;
+    }
   }
 }
 
-/**
- * LightEntity — wraps a THREE.Light so it can live in the engine's entity
- * list and appear in the hierarchy. Ambient/hemisphere lights have no
- * position to drag; directional/point/spot do.
- */
-export class LightEntity extends Entity {
-  constructor(light, name) {
-    super(light);
-    light.name = name;
-    light.userData.kind = 'Light';
-  }
-  // lights need no per-frame update; destroy removes them from the scene
-  destroy(engine) { engine.scene.remove(this.object3D); }
-}
+// Each panel and job lives in its own file under ./editor/; their methods are
+// the editor's own, so `editor.select()` and `editor.applyToPrefab()` read alike.
+Object.assign(ObjectEditor.prototype,
+  undoMethods,
+  clipboardMethods,
+  prefabMethods,
+  hierarchyMethods,
+  inspectorMethods,
+  physicsSectionMethods,
+  scriptSectionMethods,
+  animationSectionMethods,
+  audioSectionMethods,
+  lightingMethods,
+  viewSectionMethods,
+  generatorSectionMethods,
+);

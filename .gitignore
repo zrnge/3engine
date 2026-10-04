@@ -1,2 +1,20 @@
 .navy/
 chats/
+node_modules/
+
+# screenshots the browser smoke test writes (test/browser/smoke.mjs)
+smoke.png
+smoke-controls.png
+
+# test and tool output
+coverage/
+test-results/
+playwright-report/
+*.log
+
+# editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
